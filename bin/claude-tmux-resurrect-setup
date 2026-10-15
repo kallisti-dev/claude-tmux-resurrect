@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# Register this integration alongside existing tmux and resurrect hooks.
+# SPDX-License-Identifier: BSD-3-Clause
+set -euo pipefail
+# shellcheck source=share/claude-tmux-resurrect/lib.sh
+source "${BASH_SOURCE[0]%/*}/../share/claude-tmux-resurrect/lib.sh"
+require_tmux
+[[ $# == 0 || ($# == 1 && ${1:-} == --remove) ]] || die 'usage: claude-tmux-resurrect-setup [--remove]'
+bin_dir=$(cd -- "${BASH_SOURCE[0]%/*}" && pwd)
+prefix=@claude-tmux-resurrect
+
+# Serialize reloads without clearing or rebuilding another plugin's hook array.
+tmux wait-for -L claude-tmux-resurrect-setup
+trap 'tmux wait-for -U claude-tmux-resurrect-setup' EXIT
+
+option() { tmux show-options -gqv "$1"; }
+
+compose_hook() {
+  local phase=$1 previous=$2 own=$3 name
+  if [[ -z $previous ]]; then
+    printf '%s' "$own"
+    return
+  fi
+  name=__claude_tmux_resurrect_${phase//-/_}
+  printf '%s\n' "$name() {" '  local previous_status=0 own_status=0'
+  if [[ $phase == pre-restore-all ]]; then
+    printf '  %s "$@" || own_status=$?\n' "$own"
+  fi
+  # A subshell keeps an existing hook's exit from skipping our cleanup. Match
+  # resurrect's argument convention: append arguments to its shell command.
+  printf '  (\n%s "$@"\n  ) || previous_status=$?\n' "$previous"
+  if [[ $phase != pre-restore-all ]]; then
+    printf '  %s "$@" || own_status=$?\n' "$own"
+  fi
+  # These expressions are expanded later, by the hook's shell.
+  # shellcheck disable=SC2016
+  printf '%s\n' \
+    '  if [[ $own_status != 0 ]]; then return "$own_status"; fi' \
+    '  return "$previous_status"' '}' "$name"
+}
+
+register_resurrect_hook() {
+  local phase=$1 script=$2 current managed previous own command
+  current=$(option "@resurrect-hook-$phase")
+  managed=$(option "$prefix-managed-$phase")
+  previous=$(option "$prefix-previous-$phase")
+  own=$(quote "$bin_dir/$script")
+  if [[ -z $managed || $current != "$managed" ]]; then
+    # Do not capture a wrapper around one of our generated functions and then
+    # nest it again. A directly replaced hook is safe to capture on reload.
+    [[ -z $managed || $current != *"$managed"* ]] || die "@resurrect-hook-$phase wraps a setup-generated hook; reset that option before running setup"
+    [[ $current != *'__claude_tmux_resurrect_'* ]] || die "@resurrect-hook-$phase wraps a setup-generated hook; reset that option before running setup"
+    previous=$current
+    # Adopt the equivalent low-level configuration without running it twice.
+    [[ $previous != "$script" && $previous != "$own" && $previous != "$bin_dir/$script" ]] || previous=''
+  fi
+  command=$(compose_hook "$phase" "$previous" "$own")
+  tmux set-option -g "$prefix-previous-$phase" "$previous"
+  tmux set-option -g "$prefix-managed-$phase" "$command"
+  tmux set-option -g "@resurrect-hook-$phase" "$command"
+}
+
+remove_resurrect_hook() {
+  local phase=$1 managed previous
+  managed=$(option "$prefix-managed-$phase")
+  previous=$(option "$prefix-previous-$phase")
+  if [[ -n $managed && $(option "@resurrect-hook-$phase") == "$managed" ]]; then
+    if [[ -n $previous ]]; then
+      tmux set-option -g "@resurrect-hook-$phase" "$previous"
+    else
+      tmux set-option -gu "@resurrect-hook-$phase"
+    fi
+  fi
+  tmux set-option -gu "$prefix-previous-$phase"
+  tmux set-option -gu "$prefix-managed-$phase"
+}
+
+register_event_hook() {
+  local event=$1 handler=$2 slot expected entries entry index used=' '
+  slot=$(option "$prefix-$event-slot")
+  expected=$(option "$prefix-$event-handler")
+  if [[ ! $slot =~ ^[0-9]+$ || -z $expected || $(option "${event}[$slot]") != "$expected" ]]; then
+    entries=$(tmux show-hooks -g "$event")
+    while IFS= read -r entry; do
+      index=${entry#"${event}["}
+      [[ $index != "$entry" ]] || continue
+      index=${index%%]*}
+      [[ $index =~ ^[0-9]+$ ]] && used+="$index "
+    done <<<"$entries"
+    slot=0
+    while [[ $used == *" $slot "* ]]; do
+      slot=$((slot + 1))
+    done
+  fi
+  tmux set-hook -g "${event}[$slot]" "$handler"
+  tmux set-option -g "$prefix-$event-slot" "$slot"
+  tmux set-option -g "$prefix-$event-handler" "$(option "${event}[$slot]")"
+}
+
+remove_event_hook() {
+  local event=$1 slot expected
+  slot=$(option "$prefix-$event-slot")
+  expected=$(option "$prefix-$event-handler")
+  if [[ $slot =~ ^[0-9]+$ && -n $expected && $(option "${event}[$slot]") == "$expected" ]]; then
+    tmux set-hook -gu "${event}[$slot]"
+  fi
+  tmux set-option -gu "$prefix-$event-slot"
+  tmux set-option -gu "$prefix-$event-handler"
+}
+
+if [[ ${1:-} == --remove ]]; then
+  for phase in post-save-layout pre-restore-all post-restore-all; do
+    remove_resurrect_hook "$phase"
+  done
+  for event in client-attached client-session-changed; do
+    remove_event_hook "$event"
+  done
+else
+  register_resurrect_hook post-save-layout claude-tmux-resurrect-save
+  register_resurrect_hook pre-restore-all claude-tmux-resurrect-pre-restore
+  register_resurrect_hook post-restore-all claude-tmux-resurrect-post-restore
+  # Escape literal # in installation paths before run-shell expands formats.
+  arm=$(quote "${bin_dir//#/##}/claude-tmux-resurrect-arm")
+  handler="run-shell -b $(quote "$arm #{q:session_id}")"
+  for event in client-attached client-session-changed; do
+    register_event_hook "$event" "$handler"
+  done
+fi

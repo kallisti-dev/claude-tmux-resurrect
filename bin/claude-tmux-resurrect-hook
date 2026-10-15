@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Record and clear Claude session IDs on tmux panes.
+# SPDX-License-Identifier: BSD-3-Clause
+set -euo pipefail
+# shellcheck source=share/claude-tmux-resurrect/lib.sh
+source "${BASH_SOURCE[0]%/*}/../share/claude-tmux-resurrect/lib.sh"
+
+# Claude also runs outside tmux; that is a successful no-op.
+[[ -n ${TMUX_PANE:-} && -n ${TMUX:-} ]] || exit 0
+require_tmux
+[[ $TMUX_PANE =~ ^%[0-9]+$ ]] || die 'TMUX_PANE is not a pane ID'
+payload=$(jq -cse 'if length == 1 and (.[0] | type == "object") then .[0] else error("expected one object") end') || die 'invalid hook JSON: expected one object'
+jq -e '.session_id | type == "string" and test("^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}\\z")' >/dev/null <<<"$payload" || die 'invalid hook session_id: expected a session ID string'
+jq -e '.hook_event_name == "SessionStart" or .hook_event_name == "SessionEnd"' >/dev/null <<<"$payload" || die 'unsupported hook event (expected SessionStart or SessionEnd)'
+event=$(jq -r '.hook_event_name // empty' <<<"$payload")
+id=$(jq -er '.session_id | select(type == "string")' <<<"$payload") || die 'hook session_id must be a string'
+valid_id "$id" || die 'invalid hook session_id'
+case "$event" in
+  SessionStart)
+    tmux set-option -p -t "$TMUX_PANE" @claude_session_id "$id"
+    tmux set-option -pu -t "$TMUX_PANE" @claude_resume_cmd
+    tmux set-option -pu -t "$TMUX_PANE" @claude_resume_data
+    ;;
+  SessionEnd)
+    # Compare and clear on the server without yielding to a newer start event.
+    tmux if-shell -F -t "$TMUX_PANE" "#{==:#{@claude_session_id},$id}" \
+      "set-option -pu -t $TMUX_PANE @claude_session_id"
+    ;;
+  *) die "unsupported hook event: $event (expected SessionStart or SessionEnd)" ;;
+esac

@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Prepare Claude resume commands after tmux layout restoration.
+# SPDX-License-Identifier: BSD-3-Clause
+set -euo pipefail
+# shellcheck source=share/claude-tmux-resurrect/lib.sh
+source "${BASH_SOURCE[0]%/*}/../share/claude-tmux-resurrect/lib.sh"
+require_tmux
+[[ $# -le 1 ]] || die 'usage: claude-tmux-resurrect-post-restore [SNAPSHOT]'
+# Resurrect navigates through sessions while restoring its layout. Stage only
+# after that navigation, and suppress attach hooks until all panes are ready.
+tmux set-option -g @claude_restoring 1
+trap 'tmux set-option -gu @claude_restoring' EXIT
+snapshot=${1:-$(last_snapshot)}
+# A new restore replaces the pending set, including when choosing an older
+# snapshot that has no mapping for a previously queued pane.
+while IFS= read -r pane; do
+  tmux set-option -pu -t "$pane" @claude_resume_cmd
+  tmux set-option -pu -t "$pane" @claude_resume_data
+done < <(tmux list-panes -a -F '#{pane_id}')
+while IFS= read -r session; do
+  tmux set-option -u -t "$session" @claude_pending
+done < <(tmux list-sessions -F '#{session_id}')
+[[ -f $snapshot ]] || {
+  warn "snapshot not found: $snapshot"
+  exit 0
+}
+while IFS= read -r line; do
+  [[ $line == claude-tmux$'\t'* ]] || continue
+  record=${line#*$'\t'}
+  if ! valid_record "$record"; then
+    warn 'invalid session metadata in snapshot; skipping'
+    continue
+  fi
+  target=$(record_target "$record")
+  pane=$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null) || continue
+  [[ -n $pane ]] || continue
+  # Never inject a second resume into a live or previously launched pane.
+  [[ -z $(pane_option "$pane" @claude_session_id) && -z $(pane_option "$pane" @claude_launched) ]] || continue
+  if ! cmd=$(resume_command "$record"); then
+    # Remove a previous pending command if its metadata has become stale.
+    tmux set-option -pu -t "$pane" @claude_resume_cmd
+    tmux set-option -pu -t "$pane" @claude_resume_data
+    continue
+  fi
+  tmux set-option -p -t "$pane" @claude_resume_data "$record"
+  tmux set-option -p -t "$pane" @claude_resume_cmd "$cmd"
+  session=$(tmux display-message -p -t "$pane" '#{session_id}')
+  tmux set-option -t "$session" @claude_pending 1
+done <"$snapshot"
+tmux set-option -gu @claude_restoring
+trap - EXIT
+
+# display-message has a default session even without a client; use attachment
+# counts so a truly detached cold restore launches no Claude processes.
+while IFS= read -r session; do
+  "${BASH_SOURCE[0]%/*}/claude-tmux-resurrect-arm" "$session"
+done < <(tmux list-sessions -F '#{?session_attached,#{session_id},}')

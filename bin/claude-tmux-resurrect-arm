@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Resume pending Claude conversations when their tmux session is attached.
+# SPDX-License-Identifier: BSD-3-Clause
+set -euo pipefail
+# shellcheck source=share/claude-tmux-resurrect/lib.sh
+source "${BASH_SOURCE[0]%/*}/../share/claude-tmux-resurrect/lib.sh"
+require_tmux
+[[ $# == 1 ]] || die 'usage: claude-tmux-resurrect-arm TMUX_SESSION_ID'
+session=$1
+[[ -n $session ]] || exit 0
+[[ $session =~ ^\$[0-9]+$ ]] || die "claude-tmux-resurrect-arm expects a tmux session ID (\$N), not a name"
+[[ $(tmux show-options -gqv @claude_restoring) != 1 ]] || exit 0
+[[ $(tmux show-options -qv -t "$session" @claude_pending 2>/dev/null) == 1 ]] || exit 0
+[[ $(tmux display-message -p -t "$session" '#{session_attached}') != 0 ]] || exit 0
+need claude
+
+# Two clients may attach simultaneously. Serialize the read/send/clear sequence.
+lock=claude-tmux-arm-${session#\$}
+tmux wait-for -L "$lock"
+trap 'tmux wait-for -U "$lock"' EXIT
+[[ $(tmux show-options -gqv @claude_restoring) != 1 ]] || exit 0
+remaining=0
+while IFS= read -r pane; do
+  record=$(pane_option "$pane" @claude_resume_data)
+  [[ -n $record ]] || continue
+  if [[ -n $(pane_option "$pane" @claude_session_id) || -n $(pane_option "$pane" @claude_launched) ]]; then
+    tmux set-option -pu -t "$pane" @claude_resume_cmd
+    tmux set-option -pu -t "$pane" @claude_resume_data
+    continue
+  fi
+  # Do not type into an editor, copy mode, or another foreground application.
+  command=$(tmux display-message -p -t "$pane" '#{pane_current_command}')
+  case "$command" in
+    bash | zsh | sh | dash | ksh) ;;
+    *)
+      warn "pane $pane is not at a supported shell; leaving resume pending"
+      remaining=1
+      continue
+      ;;
+  esac
+  if [[ $(tmux display-message -p -t "$pane" '#{pane_in_mode}') != 0 ]]; then
+    warn "pane $pane is in copy mode; leaving resume pending"
+    remaining=1
+    continue
+  fi
+  if ! cmd=$(resume_command "$record"); then
+    tmux set-option -pu -t "$pane" @claude_resume_cmd
+    tmux set-option -pu -t "$pane" @claude_resume_data
+    continue
+  fi
+  # Literal mode prevents tmux interpreting command text as key names.
+  tmux send-keys -l -t "$pane" "$cmd"
+  tmux send-keys -t "$pane" Enter
+  tmux set-option -p -t "$pane" @claude_launched 1
+  tmux set-option -pu -t "$pane" @claude_resume_cmd
+  tmux set-option -pu -t "$pane" @claude_resume_data
+done < <(tmux list-panes -s -t "$session" -F '#{pane_id}')
+if [[ $remaining == 0 ]]; then
+  tmux set-option -u -t "$session" @claude_pending
+fi

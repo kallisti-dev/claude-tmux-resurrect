@@ -1,0 +1,4 @@
+{"type":"user","cwd":"/synthetic/old","message":{"content":"synthetic fixture; no user transcript data"}}
+{"type":"assistant","message":{"content":"no cwd in this record"}}
+{"type":"system","cwd":"@CURRENT_CWD@"}
+{"type":"assistant","message":

@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Save exact Claude session mappings in a tmux-resurrect snapshot.
+# SPDX-License-Identifier: BSD-3-Clause
+set -euo pipefail
+# shellcheck source=share/claude-tmux-resurrect/lib.sh
+source "${BASH_SOURCE[0]%/*}/../share/claude-tmux-resurrect/lib.sh"
+require_tmux
+need mktemp mv rm
+[[ $# == 1 && -f $1 && ! -L $1 ]] || die 'usage: claude-tmux-resurrect-save SNAPSHOT (a regular resurrect snapshot, not a symlink)'
+snapshot=$1
+umask 077
+records=$(mktemp "${snapshot}.claude-records.XXXXXX")
+output=$(mktemp "${snapshot}.claude-save.XXXXXX")
+trap 'rm -f -- "$records" "$output"' EXIT
+
+# Use snapshot pane identities rather than whitespace-delimited list-panes.
+# This also respects resurrect's decision to omit grouped sessions.
+while IFS= read -r row; do
+  target=$(jq -r '"=" + .session + ":" + .window + "." + .pane' <<<"$row")
+  pane=$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null) || continue
+  [[ -n $pane ]] || continue
+  id=$(pane_option "$pane" @claude_session_id)
+  if [[ -z $id ]]; then
+    # Save-before-attach must not discard sessions still waiting to launch.
+    pending=$(pane_option "$pane" @claude_resume_data)
+    if [[ -n $pending ]] && valid_record "$pending"; then
+      jq -c --argjson row "$row" '. + $row' <<<"$pending" >>"$records"
+    fi
+    continue
+  fi
+  if ! valid_id "$id"; then
+    warn "invalid session ID on $pane; skipping"
+    continue
+  fi
+  dir=$(tmux display-message -p -t "$pane" '#{pane_current_path}')
+  if transcript=$(find_transcript "$id"); then
+    # JSON decoding handles spaces, escaping and pretty/partially written lines.
+    last_cwd=$(jq -Rn '
+      reduce inputs as $line (null;
+        (try ($line | fromjson) catch null) as $entry |
+        if ($entry | type) == "object" and ($entry.cwd | type) == "string"
+          and ($entry.cwd | startswith("/")) then $entry.cwd else . end
+      ) | . // empty
+    ' "$transcript")
+    [[ -z $last_cwd ]] || dir=$(jq -r . <<<"$last_cwd")
+  else
+    warn "no unique transcript for $id; saving pane directory as fallback"
+  fi
+  record=$(jq -c --arg cwd "$dir" --arg id "$id" --arg worktree "$(worktree_name "$dir")" \
+    '. + {version: 1, cwd: $cwd, session_id: $id, worktree: $worktree}' <<<"$row")
+  if valid_record "$record"; then
+    printf '%s\n' "$record" >>"$records"
+  else
+    warn "unsupported metadata on $pane (control characters or invalid pane identity); skipping"
+  fi
+done < <(jq -Rc 'split("\t") | select(.[0] == "pane" and length >= 11) |
+  {session: .[1], window: .[2], pane: .[5]}' "$snapshot")
+
+# Field 11 must be exactly ":" to suppress resurrect's generic process restart.
+# Hook-marked panes may appear as node or a shell, so include mapped identities.
+jq -Rr --slurpfile records "$records" '
+  split("\t") as $f |
+  if $f[0] == "claude-tmux" then empty
+  elif $f[0] == "pane" and ($f | length) >= 11 and
+    (($f[9] | test("(^|/)claude($|[- ])"; "i")) or
+      any($records[]; .session == $f[1] and .window == $f[2] and .pane == $f[5]))
+  then $f | .[10] = ":" | join("\t")
+  else . end
+' "$snapshot" >"$output"
+while IFS= read -r record; do
+  printf 'claude-tmux\t%s\n' "$record" >>"$output"
+done <"$records"
+mv -- "$output" "$snapshot"
