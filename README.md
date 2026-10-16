@@ -292,8 +292,9 @@ The module installs the integration, Claude Code, and resurrect, and enables
 tmux system-wide. It configures `/etc/tmux.conf` and writes the Claude hooks to
 `/etc/claude-code/managed-settings.d/claude-tmux-resurrect.json`. These are
 [managed settings](https://code.claude.com/docs/en/managed-settings) for all
-users; a higher-priority managed policy can supersede this fragment. Claude
-Code 2.1.83 or newer is required for settings fragments.
+users and require Claude Code 2.1.83 or newer. Claude Code ignores this file
+when your organization delivers server-managed settings; organization-managed
+settings are [unsupported](docs/compatibility.md#supported-environments).
 
 Use `programs.claude-tmux-resurrect.package` to override the integration package
 and `programs.claude-tmux-resurrect.claudePackage` to select another Claude Code

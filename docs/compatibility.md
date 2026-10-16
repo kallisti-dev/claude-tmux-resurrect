@@ -10,6 +10,16 @@ One foreground Claude conversation per pane is supported. Fish, Nushell, native
 Windows, and remote Claude processes are unsupported. Linux under WSL2 is
 untested.
 
+Organization-managed Claude Code settings are unsupported. By default, Claude
+Code [applies only the highest-priority managed
+source](https://code.claude.com/docs/en/managed-settings#how-claude-code-combines-managed-sources).
+Server-managed settings, from the claude.ai admin console or a Claude apps
+gateway, and MDM policies rank above managed settings files, so Claude Code
+ignores the hooks installed by the NixOS and nix-darwin modules when either
+applies. Managed policies can also block the hooks: `allowManagedHooksOnly`
+stops hooks in user settings from running, and `disableAllHooks` stops all
+hooks. `/status` shows which managed source Claude Code uses.
+
 ## Testing limits
 
 Tests stub Claude. They verify exact argv, cwd, hook behavior, tmux lifecycle,
