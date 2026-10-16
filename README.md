@@ -195,9 +195,26 @@ Bourne-compatible shell (`bash`, `zsh`, `sh`, `dash`, or `ksh`).
 
 ### Manual
 
-1. Merge the `hooks` entries from
-   [examples/claude-hooks.json](examples/claude-hooks.json) into your Claude Code
-   user settings, normally `~/.claude/settings.json`. 
+1. Merge these hooks into your Claude Code user settings, normally
+   `~/.claude/settings.json`:
+
+   ```json
+   {
+     "hooks": {
+       "SessionStart": [
+         {
+           "hooks": [{ "type": "command", "command": "claude-tmux-resurrect-hook" }]
+         }
+       ],
+       "SessionEnd": [
+         {
+           "hooks": [{ "type": "command", "command": "claude-tmux-resurrect-hook" }]
+         }
+       ]
+     }
+   }
+   ```
+
 2. Add this to your tmux configuration after any existing resurrect hook
    settings. With TPM, keep its initialization at the end of your configuration:
 
