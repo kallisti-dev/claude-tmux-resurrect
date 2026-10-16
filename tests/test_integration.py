@@ -71,6 +71,8 @@ class Integration(unittest.TestCase):
         config.write_text(
             f"set -g default-shell {shlex.quote(BASH)}\n"
             f"set -g default-command {shlex.quote(BASH + ' --noprofile --norc')}\n"
+            # Snapshot comparisons need names independent of transient commands.
+            "set -g automatic-rename off\n"
             "set -g status off\n"
             "set -g exit-empty off\n"
             "set -g remain-on-exit off\n"
