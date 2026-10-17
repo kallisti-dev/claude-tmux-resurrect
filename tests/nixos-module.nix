@@ -111,6 +111,9 @@ let
     (check enabled.programs.tmux.enable "must enable tmux")
     (check (hasPackage enabled defaultPackage) "must install the default integration package")
     (check (hasPackage enabled fakeClaude) "must install the configured Claude Code package")
+    (check (
+      enabled.environment.etc.${settingsPath}.mode == "0444"
+    ) "must copy managed settings rather than link them")
     (check (hasPackage overridden overridePackage) "must install the integration package override")
     (check (!hasPackage overridden defaultPackage) "must replace the default integration package")
     (check (hasPackage overridden customClaude) "must install a custom Claude Code package")

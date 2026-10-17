@@ -48,11 +48,16 @@ in
 
     environment = {
       systemPackages = [ cfg.package ] ++ lib.optional (cfg.claudePackage != null) cfg.claudePackage;
-      etc."claude-code/managed-settings.d/claude-tmux-resurrect.json".text = builtins.toJSON {
-        hooks = {
-          SessionStart = [ claudeHook ];
-          SessionEnd = [ claudeHook ];
+      etc."claude-code/managed-settings.d/claude-tmux-resurrect.json" = {
+        text = builtins.toJSON {
+          hooks = {
+            SessionStart = [ claudeHook ];
+            SessionEnd = [ claudeHook ];
+          };
         };
+        # Copy rather than link: Claude Code's /status and `claude doctor` warn
+        # about managed settings reached through a link outside their directory.
+        mode = "0444";
       };
     };
 
