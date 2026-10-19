@@ -31,11 +31,16 @@ see [troubleshooting](troubleshooting.md) for recovery steps.
 ## Hook registration
 
 `claude-tmux-resurrect-setup` registers the existing commands with tmux and
-resurrect. It does not add another dispatcher. Empty resurrect hook options point
-directly at the public commands. If an option already has a command, setup combines
+resurrect. It does not add another dispatcher. Empty resurrect hook options run
+the public commands directly. If an option already has a command, setup combines
 it with ours in a single inline shell function that forwards hook arguments and
 returns a failure status if either command fails. Our pre-restore guard runs first;
 existing post-restore and save commands run before ours.
+
+Each registered command first checks that its script still exists and otherwise
+succeeds without doing anything. A tmux server keeps registrations until it
+exits, and reloading a configuration does not remove them, so this keeps hooks
+left behind by an uninstall from failing while other callbacks still run.
 
 The existing command runs in a subshell, so an `exit` cannot prevent ours from
 running. Its shell-local directory and environment changes stay in that subshell.

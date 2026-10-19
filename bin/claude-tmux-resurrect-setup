@@ -15,6 +15,14 @@ trap 'tmux wait-for -U claude-tmux-resurrect-setup' EXIT
 
 option() { tmux show-options -gqv "$1"; }
 
+# Usage: guarded QUOTED_PATH
+# Print a shell command that runs QUOTED_PATH, a path already quoted for the
+# shell, with any arguments appended to the command. Once the path no longer
+# exists, the command succeeds without running anything: tmux keeps these
+# registrations until its server exits, even after a plugin manager deletes
+# this directory.
+guarded() { printf '[ ! -e %s ] || %s' "$1" "$1"; }
+
 compose_hook() {
   local phase=$1 previous=$2 own=$3 name
   if [[ -z $previous ]]; then
@@ -44,15 +52,15 @@ register_resurrect_hook() {
   current=$(option "@resurrect-hook-$phase")
   managed=$(option "$prefix-managed-$phase")
   previous=$(option "$prefix-previous-$phase")
-  own=$(quote "$bin_dir/$script")
+  own=$(guarded "$(quote "$bin_dir/$script")")
   if [[ -z $managed || $current != "$managed" ]]; then
     # Do not capture a wrapper around one of our generated functions and then
     # nest it again. A directly replaced hook is safe to capture on reload.
     [[ -z $managed || $current != *"$managed"* ]] || die "@resurrect-hook-$phase wraps a setup-generated hook; reset that option before running setup"
     [[ $current != *'__claude_tmux_resurrect_'* ]] || die "@resurrect-hook-$phase wraps a setup-generated hook; reset that option before running setup"
     previous=$current
-    # Adopt the equivalent low-level configuration without running it twice.
-    [[ $previous != "$script" && $previous != "$own" && $previous != "$bin_dir/$script" ]] || previous=''
+    # Adopt our own command, set without bookkeeping, without running it twice.
+    [[ $previous != "$own" ]] || previous=''
   fi
   command=$(compose_hook "$phase" "$previous" "$own")
   tmux set-option -g "$prefix-previous-$phase" "$previous"
@@ -121,7 +129,7 @@ else
   register_resurrect_hook post-restore-all claude-tmux-resurrect-post-restore
   # Escape literal # in installation paths before run-shell expands formats.
   arm=$(quote "${bin_dir//#/##}/claude-tmux-resurrect-arm")
-  handler="run-shell -b $(quote "$arm #{q:session_id}")"
+  handler="run-shell -b $(quote "$(guarded "$arm") #{q:session_id}")"
   for event in client-attached client-session-changed; do
     register_event_hook "$event" "$handler"
   done

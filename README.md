@@ -83,8 +83,9 @@ callbacks and existing tmux attach hooks. Reloading does not add duplicates.
 To change or remove an existing callback, follow the
 [troubleshooting steps](docs/troubleshooting.md#replacing-or-removing-a-shared-hook).
 
-Before disabling a module or removing the setup line, run this inside each
-affected tmux server:
+Registrations stay in a running tmux server until it exits, but do nothing once
+the scripts are uninstalled. To remove them from a running server, for example
+before disabling a module or removing the setup line, run this inside it:
 
 ```sh
 claude-tmux-resurrect-setup --remove

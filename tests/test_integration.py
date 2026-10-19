@@ -298,16 +298,32 @@ class Integration(unittest.TestCase):
             for line in (self.base / "previous.jsonl").read_text().splitlines()
         ]
 
-    def test_setup_uses_direct_commands_and_rejects_recapturing_them(self):
+    def copy_scripts(self, destination):
+        # A Nix wrapper runs its wrapped script from the store, so copy the
+        # wrapped script itself; the copy then runs from where it is.
+        (destination / "bin").mkdir(parents=True)
+        for script in BIN.iterdir():
+            if script.name.startswith("."):
+                continue
+            wrapped = BIN / f".{script.name}-wrapped"
+            copied = destination / "bin" / script.name
+            shutil.copyfile(wrapped if wrapped.is_file() else script, copied)
+            copied.chmod(0o755)
+        library = destination / "share/claude-tmux-resurrect/lib.sh"
+        library.parent.mkdir(parents=True)
+        shutil.copyfile(BIN.parent / "share/claude-tmux-resurrect/lib.sh", library)
+
+    def test_setup_registers_guarded_commands_and_rejects_recapturing_them(self):
         self.load_hooks()
         for phase, script in [
             ("post-save-layout", "claude-tmux-resurrect-save"),
             ("pre-restore-all", "claude-tmux-resurrect-pre-restore"),
             ("post-restore-all", "claude-tmux-resurrect-post-restore"),
         ]:
+            path = str(BIN / script)
             self.assertEqual(
                 shlex.split(self.global_option("@resurrect-hook-" + phase)),
-                [str(BIN / script)],
+                ["[", "!", "-e", path, "]", "||", path],
             )
         option = "@resurrect-hook-post-save-layout"
         external = self.global_option(option) + "; : another-action"
@@ -498,6 +514,29 @@ class Integration(unittest.TestCase):
         self.attach()
         self.assertEqual(self.expect_launches(1)[0]["argv"], ["--resume", ID])
 
+    def test_registrations_do_nothing_after_the_scripts_are_deleted(self):
+        self.tmux(
+            "set", "-g", "@resurrect-hook-post-save-layout", self.previous_hook("save")
+        )
+        copy = self.base / "deleted copy"
+        self.copy_scripts(copy)
+        self.run_command([BASH, str(copy / "bin/claude-tmux-resurrect-setup")])
+        shutil.rmtree(copy)
+        self.write_snapshot()
+        original = self.snapshot.read_bytes()
+        self.execute_resurrect_hook("post-save-layout", self.snapshot)
+        self.assertEqual(self.snapshot.read_bytes(), original)
+        self.assertEqual(len(self.previous_calls()), 1)
+        self.execute_resurrect_hook("pre-restore-all")
+        self.execute_resurrect_hook("post-restore-all", self.snapshot)
+        for event in ["client-attached", "client-session-changed"]:
+            handler = shlex.split(
+                self.global_option(f"@claude-tmux-resurrect-{event}-handler")
+            )
+            self.assertEqual(handler[:2], ["run-shell", "-b"])
+            # Run the registered command synchronously to observe its status.
+            self.tmux("run-shell", handler[2])
+
     def test_hook_start_end_and_out_of_order_end(self):
         self.hook("SessionStart")
         self.assertEqual(self.option("@claude_session_id"), ID)
@@ -508,17 +547,11 @@ class Integration(unittest.TestCase):
 
     def test_overlapping_session_end_does_not_clear_newer_start(self):
         self.hook("SessionStart")
-        # Nix wrappers prepend tmux on PATH. Copy the tested entry point and
-        # library so both source and package checks can interpose the proxy.
+        # Nix wrappers prepend tmux on PATH. Copy the scripts so both source
+        # and package checks can interpose the proxy.
         copied = self.base / "hook-under-test"
-        (copied / "bin").mkdir(parents=True)
-        library = copied / "share/claude-tmux-resurrect/lib.sh"
-        library.parent.mkdir(parents=True)
-        shutil.copyfile(BIN.parent / "share/claude-tmux-resurrect/lib.sh", library)
-        name = "claude-tmux-resurrect-hook"
-        wrapped = BIN / f".{name}-wrapped"
-        hook = copied / "bin" / name
-        shutil.copyfile(wrapped if wrapped.is_file() else BIN / name, hook)
+        self.copy_scripts(copied)
+        hook = copied / "bin/claude-tmux-resurrect-hook"
         marker = self.base / "interleaved-start"
         proxy = self.stubdir / "tmux"
         # Start the new conversation after the old End's first tmux request
