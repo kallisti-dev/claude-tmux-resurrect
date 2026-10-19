@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# Report whether this tmux server and shell can save and resume Claude sessions.
+# SPDX-License-Identifier: BSD-3-Clause
+set -euo pipefail
+# shellcheck source=lib/claude-tmux-resurrect.sh
+source "${BASH_SOURCE[0]%/*}/../lib/claude-tmux-resurrect.sh"
+usage='usage: claude-tmux-resurrect-check [--session CLAUDE_SESSION_ID]'
+
+# Run through tmux, this succeeds only if the scripts' dependencies are on the
+# PATH where tmux runs the plugin's callbacks.
+if [[ ${1:-} == --server ]]; then
+  require_tmux
+  exit 0
+fi
+session=''
+if [[ ${1:-} == --session && $# == 2 ]]; then
+  session=$2
+elif [[ $# != 0 ]]; then
+  die "$usage"
+fi
+
+problems=0
+ok() { printf 'ok       %s\n' "$*"; }
+problem() {
+  printf 'problem  %s\n' "$*"
+  problems=$((problems + 1))
+}
+info() { printf 'info     %s\n' "$*"; }
+listed() { [[ :$1: == *:"$2":* ]]; }
+
+need tmux
+[[ -n ${TMUX:-} ]] || die 'run inside tmux (TMUX must identify the intended server)'
+option() { tmux show-options -gqv "$1"; }
+dir=$(option @claude-tmux-resurrect-dir)
+version=$(option @claude-tmux-resurrect-version)
+
+tmux_version=$(tmux -V)
+if at_least "${tmux_version#tmux }" 3.2; then
+  ok "$tmux_version"
+else
+  problem "$tmux_version is older than tmux 3.2"
+fi
+server_check="$(quote "$plugin_bin/claude-tmux-resurrect-check") --server"
+# run-shell expands formats in its command.
+if tmux run-shell "${server_check//#/##}" >/dev/null 2>&1; then
+  ok 'tmux finds the commands the plugin needs, including jq'
+else
+  problem "tmux can't run the plugin's commands; make jq available on the tmux server's PATH"
+fi
+if [[ -n $(option @resurrect-save-script-path) ]]; then
+  ok 'tmux-resurrect is loaded'
+else
+  problem 'tmux-resurrect is not loaded'
+fi
+
+if [[ -z $dir ]]; then
+  problem 'the plugin has not loaded in this tmux server; check its @plugin line, then reload the configuration'
+else
+  ok "the plugin ${version:-(unknown version)} is loaded from $dir"
+  [[ $dir == "${plugin_bin%/bin}" ]] || info "this check runs from ${plugin_bin%/bin}"
+  for phase in post-save-layout pre-restore-all post-restore-all; do
+    managed=$(option "@claude-tmux-resurrect-managed-$phase")
+    if [[ -z $managed || $(option "@resurrect-hook-$phase") != "$managed" ]]; then
+      problem "@resurrect-hook-$phase was replaced after the plugin loaded; set resurrect hooks before the plugin loads"
+    fi
+  done
+  server_dirs=$(tmux show-environment -g CLAUDE_CODE_PLUGIN_DIRS 2>/dev/null || true)
+  server_dirs=${server_dirs#CLAUDE_CODE_PLUGIN_DIRS=}
+  if listed "$server_dirs" "$dir"; then
+    ok "new panes list the plugin in CLAUDE_CODE_PLUGIN_DIRS"
+  else
+    problem "tmux's global CLAUDE_CODE_PLUGIN_DIRS doesn't list the plugin; reload the tmux configuration"
+  fi
+  if listed "${CLAUDE_CODE_PLUGIN_DIRS:-}" "$dir"; then
+    ok "this shell's CLAUDE_CODE_PLUGIN_DIRS lists the plugin"
+  else
+    problem "this shell's CLAUDE_CODE_PLUGIN_DIRS doesn't list the plugin, so Claude started here won't record its session; use a new pane"
+  fi
+fi
+
+if ! command -v claude >/dev/null 2>&1; then
+  info 'claude is not on PATH, so its version and plugin list were not checked'
+else
+  claude_version=$(claude --version 2>/dev/null || true)
+  claude_version=${claude_version%% *}
+  if at_least "${claude_version:-0}" 2.1.280; then
+    ok "Claude Code $claude_version"
+  else
+    problem "Claude Code ${claude_version:-(unknown version)} is older than 2.1.280, which loads plugins from CLAUDE_CODE_PLUGIN_DIRS"
+  fi
+  if [[ -n $dir ]]; then
+    # Ask what Claude would load in a new pane.
+    plugins=$(CLAUDE_CODE_PLUGIN_DIRS=$server_dirs claude plugin list --json 2>/dev/null || true)
+    if jq -e --arg dir "$dir" 'any(.[]; .id == "tmux-resurrect@inline" and .enabled and .installPath == $dir)' >/dev/null 2>&1 <<<"$plugins"; then
+      ok 'Claude Code loads the plugin as tmux-resurrect@inline'
+    else
+      problem "Claude Code doesn't load the plugin from $dir; see /plugin in a Claude session started in a new pane"
+    fi
+  fi
+fi
+
+unrecorded=()
+while IFS=$'\t' read -r pane where command; do
+  [[ $command =~ (^|/)[Cc]laude($|[-\ ]) ]] || continue
+  [[ -z $(pane_option "$pane" @claude_session_id) ]] || continue
+  unrecorded+=("$where")
+done < <(tmux list-panes -a -F $'#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}')
+if [[ ${#unrecorded[@]} == 0 ]]; then
+  ok 'every pane running Claude has a recorded session ID'
+else
+  problem "no session ID recorded for Claude in $(summarize "${unrecorded[@]}")"
+fi
+
+if [[ -n $session && -n ${TMUX_PANE:-} ]]; then
+  recorded=$(pane_option "$TMUX_PANE" @claude_session_id)
+  if [[ $recorded == "$session" ]]; then
+    ok "this pane records session $session"
+  else
+    problem "this pane records ${recorded:-no session}, not this session ($session)"
+  fi
+fi
+
+if [[ $problems == 0 ]]; then
+  echo 'No problems found.'
+else
+  echo "$problems problem(s) found; see docs/troubleshooting.md in the plugin directory."
+  exit 1
+fi

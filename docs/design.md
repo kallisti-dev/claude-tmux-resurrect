@@ -106,6 +106,8 @@ current value is still the one setup installed.
 | `claude-tmux-resurrect-post-restore [SNAPSHOT]` | Queue exact resume commands, clear the restore gate, and launch sessions that have attached clients |
 | `claude-tmux-resurrect-arm '$N' [CLIENT]` | Dispatch pending commands once for the attached tmux session ID, and show kept notices on an attaching client |
 | `claude-tmux-resurrect-notify MESSAGE` | Show a scheduled notice on attached clients, or keep it for the next attach |
+| `claude-tmux-resurrect-check [--session ID]` | Report problems with the tmux server, the calling shell, Claude Code, and panes running Claude |
+| `skills/check/SKILL.md` | `/tmux-resurrect:check`, which has Claude run the check and explain its result |
 | `lib/claude-tmux-resurrect.sh` | Share transcript lookup, metadata validation, command quoting, and snapshot path resolution |
 
 ## Local data

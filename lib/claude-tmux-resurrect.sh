@@ -92,6 +92,20 @@ require_tmux() {
 # Print the version in the plugin manifest under DIR, or nothing.
 plugin_version() { jq -r '.version // empty' "$1/.claude-plugin/plugin.json" 2>/dev/null || true; }
 
+# Usage: at_least VERSION MINIMUM
+# Succeed if the dotted VERSION is MINIMUM or later. Characters other than
+# digits and dots, as in tmux's 3.4a or next-3.6, are ignored.
+at_least() {
+  local i have=() need=()
+  IFS=. read -ra have <<<"${1//[!0-9.]/}"
+  IFS=. read -ra need <<<"$2"
+  for i in 0 1 2; do
+    ((10#${have[i]:-0} > 10#${need[i]:-0})) && return 0
+    ((10#${have[i]:-0} < 10#${need[i]:-0})) && return 1
+  done
+  return 0
+}
+
 # Usage: pane_option PANE OPTION
 # Print PANE's own value of OPTION, or nothing if it is unset.
 pane_option() { tmux show-options -pqv -t "$1" "$2"; }

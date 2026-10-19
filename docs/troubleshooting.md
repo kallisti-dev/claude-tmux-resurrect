@@ -7,6 +7,14 @@ plugin's `bin` directory, which setup records in a tmux option:
 plugin=$(tmux show-options -gqv @claude-tmux-resurrect-dir)
 ```
 
+Start with the check, which reports each problem it finds with a line beginning
+`problem`. In a Claude session, `/tmux-resurrect:check` runs it and explains the
+result.
+
+```sh
+"$plugin"/bin/claude-tmux-resurrect-check
+```
+
 ## No session was saved
 
 A save reports Claude panes without a recorded session ID in tmux's message

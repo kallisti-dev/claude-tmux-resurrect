@@ -700,6 +700,73 @@ class Integration(unittest.TestCase):
         self.expect_no_new_messages(2)
         self.assertEqual(self.option("@claude_session_id"), ID)
 
+    def fake_claude(self, version="2.1.300", loads=True):
+        # Answers the two commands the check runs.
+        directory = self.base / "fake claude"
+        directory.mkdir(exist_ok=True)
+        script = directory / "claude"
+        script.write_text(
+            f"#!{PYTHON}\n"
+            "import json, os, sys\n"
+            "if sys.argv[1:] == ['--version']:\n"
+            f"    print({version!r} + ' (Claude Code)')\n"
+            "elif sys.argv[1:] == ['plugin', 'list', '--json']:\n"
+            "    dirs = os.environ.get('CLAUDE_CODE_PLUGIN_DIRS', '').split(':')\n"
+            "    print(json.dumps([{'id': 'tmux-resurrect@inline', 'enabled': True,\n"
+            f"        'installPath': d}} for d in dirs if d and {loads!r}]))\n"
+            "else:\n"
+            "    sys.exit(2)\n"
+        )
+        script.chmod(0o755)
+        return dict(
+            self.env,
+            PATH=f"{directory}:{BIN}:{os.environ['PATH']}",
+            CLAUDE_CODE_PLUGIN_DIRS=str(PLUGIN_ROOT),
+        )
+
+    def check(self, env, *args):
+        return self.script("claude-tmux-resurrect-check", *args, env=env, check=False)
+
+    def test_check_reports_a_working_setup(self):
+        self.tmux("set", "-g", "@resurrect-save-script-path", "/resurrect/save.sh")
+        self.load_plugin()
+        result = self.check(self.fake_claude())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("problem  ", result.stdout)
+        self.assertIn(
+            "Claude Code loads the plugin as tmux-resurrect@inline", result.stdout
+        )
+        self.assertTrue(result.stdout.endswith("No problems found.\n"))
+
+    def test_check_reports_problems(self):
+        result = self.check(self.fake_claude())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("problem  tmux-resurrect is not loaded", result.stdout)
+        self.assertIn("problem  the plugin has not loaded", result.stdout)
+
+        self.load_plugin()
+        self.tmux("set", "-g", "@resurrect-hook-post-save-layout", "true")
+        env = self.fake_claude(version="2.1.200", loads=False)
+        env.pop("CLAUDE_CODE_PLUGIN_DIRS")
+        result = self.check(env)
+        self.assertEqual(result.returncode, 1)
+        for text in [
+            "@resurrect-hook-post-save-layout was replaced",
+            "this shell's CLAUDE_CODE_PLUGIN_DIRS doesn't list the plugin",
+            "Claude Code 2.1.200 is older than 2.1.280",
+            "Claude Code doesn't load the plugin",
+        ]:
+            self.assertIn(text, result.stdout)
+
+    def test_check_compares_this_pane_with_a_claude_session(self):
+        self.load_plugin()
+        self.hook("SessionStart")
+        env = self.fake_claude()
+        result = self.check(env, "--session", ID)
+        self.assertIn(f"ok       this pane records session {ID}", result.stdout)
+        result = self.check(env, "--session", "other-session")
+        self.assertIn(f"records {ID}, not this session (other-session)", result.stdout)
+
     def test_hook_start_end_and_out_of_order_end(self):
         self.hook("SessionStart")
         self.assertEqual(self.option("@claude_session_id"), ID)
@@ -1141,6 +1208,20 @@ class Integration(unittest.TestCase):
 
         session_id = wait_until(recorded, "Claude did not record its session", 30)
         self.assertRegex(session_id, r"^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
+        self.tmux("set", "-g", "@resurrect-save-script-path", "/resurrect/save.sh")
+        result = self.script(
+            "claude-tmux-resurrect-check",
+            env=dict(
+                self.env,
+                PATH=f"{Path(CLAUDE).parent}:{BIN}:{os.environ['PATH']}",
+                CLAUDE_CODE_PLUGIN_DIRS=str(PLUGIN_ROOT),
+                CLAUDE_CONFIG_DIR=str(self.home / "claude config"),
+            ),
+        )
+        self.assertIn(
+            "ok       every pane running Claude has a recorded", result.stdout
+        )
+        self.assertTrue(result.stdout.endswith("No problems found.\n"))
         # Interrupting Claude ends its session while the pane stays open.
         self.tmux("send-keys", "-t", pane, "C-c")
         wait_until(lambda: not recorded(), "Claude did not clear its session", 30)

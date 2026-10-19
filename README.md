@@ -47,6 +47,16 @@ inherited value instead of replacing it:
 export CLAUDE_CODE_PLUGIN_DIRS="${CLAUDE_CODE_PLUGIN_DIRS:+$CLAUDE_CODE_PLUGIN_DIRS:}$HOME/my-plugins"
 ```
 
+### Checking the setup
+
+In a Claude session, run `/tmux-resurrect:check`. Claude runs the plugin's
+check and explains any problem it reports. From a shell in a tmux pane, run the
+check directly. The plugin records its directory in a tmux option:
+
+```sh
+"$(tmux show-options -gqv @claude-tmux-resurrect-dir)"/bin/claude-tmux-resurrect-check
+```
+
 ### Without TPM
 
 Clone this repository, then run its entry point from your tmux configuration

@@ -18,8 +18,10 @@ tmuxPlugins.mkTmuxPlugin {
       ./.claude-plugin/plugin.json
       ./claude-tmux-resurrect.tmux
       ./bin
+      ./docs
       ./hooks
       ./lib
+      ./skills
       ./LICENSE.md
     ];
   };
