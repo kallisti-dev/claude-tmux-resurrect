@@ -2,7 +2,10 @@ name: Checks
 
 on:
   push:
+    # Tags run these checks through the release workflow.
+    branches: ["**"]
   pull_request:
+  workflow_call:
   workflow_dispatch:
 
 permissions:

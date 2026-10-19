@@ -71,6 +71,15 @@ run-shell ~/path/to/claude-tmux-resurrect/claude-tmux-resurrect.tmux
 Press prefix + U to update plugins with TPM. Claude Code runs the plugin's hooks
 from the same directory, so there is nothing to update separately.
 
+TPM follows the `main` branch. To stay on a release instead, add its tag to the
+plugin line:
+
+```tmux
+set -g @plugin 'kallisti-dev/claude-tmux-resurrect#v0.1.0'
+```
+
+TPM doesn't move a pinned tag, so change the tag to upgrade.
+
 ### Uninstalling
 
 Remove the `@plugin` line and press prefix + alt + u. After TPM deletes the
@@ -153,6 +162,33 @@ pinned in `flake.lock`, or with a `pkgs` argument you pass:
 claude-tmux-resurrect = import (builtins.fetchTarball
   "https://github.com/kallisti-dev/claude-tmux-resurrect/archive/main.tar.gz") { inherit pkgs; };
 ```
+
+## Development
+
+`nix develop`, or direnv with the included `.envrc`, provides the tools. The
+tests use real tmux, tmux-resurrect, and TPM, with a stub in place of Claude:
+
+```sh
+python3 -m unittest discover -s tests
+```
+
+To also run the tests that start Claude Code, without network access, set
+`CLAUDE_BINARY`:
+
+```sh
+CLAUDE_BINARY=$(command -v claude) python3 -m unittest discover -s tests -k test_real_claude
+```
+
+`nix flake check` runs the tests against the source and the Nix package, along
+with linting and formatting checks and the Claude Code tests. On macOS, the
+Claude Code check needs the Nix build sandbox off or relaxed, as building
+claude-code there does.
+
+Releases are tags on `main`. To release, set the version in
+`.claude-plugin/plugin.json`, commit it to `main`, and push a tag named `v`
+followed by that version, such as `v0.2.0`. The release workflow checks that
+the tag matches the manifest and is on `main`, runs the checks on each
+platform, and creates the GitHub release.
 
 ## Documentation
 
