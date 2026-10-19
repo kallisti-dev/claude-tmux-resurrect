@@ -5,11 +5,14 @@ set -euo pipefail
 # shellcheck source=lib/claude-tmux-resurrect.sh
 source "${BASH_SOURCE[0]%/*}/../lib/claude-tmux-resurrect.sh"
 require_tmux
+need mktemp rm cat
 [[ $# -le 1 ]] || die 'usage: claude-tmux-resurrect-post-restore [SNAPSHOT]'
+# Collects why sessions were skipped, for one summary at the end.
+reasons=$(mktemp "${TMPDIR:-/tmp}/claude-tmux-resurrect.XXXXXX")
 # Resurrect navigates through sessions while restoring its layout. Stage only
 # after that navigation, and suppress attach hooks until all panes are ready.
 tmux set-option -g @claude_restoring 1
-trap 'tmux set-option -gu @claude_restoring' EXIT
+trap 'tmux set-option -gu @claude_restoring; rm -f -- "$reasons"' EXIT
 snapshot=${1:-$(last_snapshot)}
 # A new restore replaces the pending set, including when choosing an older
 # snapshot that has no mapping for a previously queued pane.
@@ -24,11 +27,13 @@ done < <(tmux list-sessions -F '#{session_id}')
   warn "snapshot not found: $snapshot"
   exit 0
 }
+skipped=0
 while IFS= read -r line; do
   [[ $line == claude-tmux$'\t'* ]] || continue
   record=${line#*$'\t'}
   if ! valid_record "$record"; then
-    warn 'invalid session metadata in snapshot; skipping'
+    warn 'invalid session metadata in snapshot; skipping' 2>>"$reasons"
+    skipped=$((skipped + 1))
     continue
   fi
   target=$(record_target "$record")
@@ -36,7 +41,8 @@ while IFS= read -r line; do
   [[ -n $pane ]] || continue
   # Never inject a second resume into a live or previously launched pane.
   [[ -z $(pane_option "$pane" @claude_session_id) && -z $(pane_option "$pane" @claude_launched) ]] || continue
-  if ! cmd=$(resume_command "$record"); then
+  if ! cmd=$(resume_command "$record" 2>>"$reasons"); then
+    skipped=$((skipped + 1))
     # Remove a previous pending command if its metadata has become stale.
     tmux set-option -pu -t "$pane" @claude_resume_cmd
     tmux set-option -pu -t "$pane" @claude_resume_data
@@ -48,7 +54,19 @@ while IFS= read -r line; do
   tmux set-option -t "$session" @claude_pending 1
 done <"$snapshot"
 tmux set-option -gu @claude_restoring
-trap - EXIT
+trap 'rm -f -- "$reasons"' EXIT
+cat -- "$reasons" >&2
+if [[ $skipped != 0 ]]; then
+  reason=''
+  IFS= read -r reason <"$reasons" || true
+  reason=${reason#claude-tmux-resurrect: }
+  reason=${reason%; skipping}
+  if [[ $skipped == 1 ]]; then
+    notify "couldn't resume a saved Claude session: $reason"
+  else
+    notify "couldn't resume $skipped saved Claude sessions; the first: $reason"
+  fi
+fi
 
 # display-message has a default session even without a client; use attachment
 # counts so a truly detached cold restore launches no Claude processes.

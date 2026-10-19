@@ -162,13 +162,19 @@ else
   register_resurrect_hook pre-restore-all claude-tmux-resurrect-pre-restore
   register_resurrect_hook post-restore-all claude-tmux-resurrect-post-restore
   # Escape literal # in installation paths before run-shell expands formats.
-  arm=$(quote "${bin_dir//#/##}/claude-tmux-resurrect-arm")
-  handler="run-shell -b $(quote "$(guarded "$arm") #{q:session_id}")"
-  for event in client-attached client-session-changed; do
-    register_event_hook "$event" "$handler"
-  done
+  arm=$(guarded "$(quote "${bin_dir//#/##}/claude-tmux-resurrect-arm")")
+  # Attaching also changes the client's session, so only the attach hook
+  # passes the client that shows messages kept while none was attached.
+  register_event_hook client-attached "run-shell -b $(quote "$arm #{q:session_id} #{q:client_name}")"
+  register_event_hook client-session-changed "run-shell -b $(quote "$arm #{q:session_id}")"
   # Claude Code loads each listed directory in place as a session-only
   # plugin, which runs this plugin's hooks/hooks.json.
-  update_plugin_dirs "$(option "$prefix-dir")" "$plugin_dir"
+  listed=$(option "$prefix-dir")
+  update_plugin_dirs "$listed" "$plugin_dir"
   tmux set-option -g "$prefix-dir" "$plugin_dir"
+  # Existing panes keep the environment they started with. When tmux starts,
+  # the configuration loads before any pane exists.
+  if [[ -z $listed && -n $(tmux list-panes -a -F . 2>/dev/null) ]]; then
+    notify 'loaded; start Claude in a new pane so tmux-resurrect can resume it'
+  fi
 fi

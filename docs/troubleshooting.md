@@ -9,7 +9,8 @@ plugin=$(tmux show-options -gqv @claude-tmux-resurrect-dir)
 
 ## No session was saved
 
-Inspect the current pane:
+A save reports Claude panes without a recorded session ID in tmux's message
+line. Inspect the current pane:
 
 ```sh
 tmux show-options -pqv @claude_session_id

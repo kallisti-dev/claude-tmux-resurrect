@@ -45,6 +45,23 @@ from launching the conversation again.
 Dispatch records that the command was sent, not that Claude started successfully;
 see [troubleshooting](troubleshooting.md) for recovery steps.
 
+## Notices
+
+Problems that need the user's attention are shown with `display-message` on
+every attached client, as well as on stderr:
+
+- setup failures, which TPM would otherwise discard
+- the first load into a server that already has panes, since Claude sessions
+  started in those panes do not load the plugin
+- Claude panes without a recorded session ID when saving, once each time that
+  set of panes changes, because automatic saves repeat
+- saved sessions that a restore cannot resume, with the first reason
+- pending resumes left for a later attach because a pane is busy or in copy mode
+
+tmux-resurrect shows its own message after running its hooks, so a notice is
+scheduled to appear one second after the event, for five seconds. If no client
+is attached by then, the notice is kept and shown when a client next attaches.
+
 ## Hook registration
 
 `claude-tmux-resurrect-setup` registers the existing commands with tmux and
@@ -82,7 +99,8 @@ current value is still the one setup installed.
 | `claude-tmux-resurrect-save SNAPSHOT` | Resolve cwd/worktree, embed mappings, blank generic saved Claude commands |
 | `claude-tmux-resurrect-pre-restore` | Suppress launches during resurrect's layout restoration |
 | `claude-tmux-resurrect-post-restore [SNAPSHOT]` | Queue exact resume commands, clear the restore gate, and launch sessions that have attached clients |
-| `claude-tmux-resurrect-arm '$N'` | Dispatch pending commands once for the attached tmux session ID |
+| `claude-tmux-resurrect-arm '$N' [CLIENT]` | Dispatch pending commands once for the attached tmux session ID, and show kept notices on an attaching client |
+| `claude-tmux-resurrect-notify MESSAGE` | Show a scheduled notice on attached clients, or keep it for the next attach |
 | `lib/claude-tmux-resurrect.sh` | Share transcript lookup, metadata validation, command quoting, and snapshot path resolution |
 
 ## Local data
@@ -113,6 +131,8 @@ integration. There is no network service or telemetry in these scripts.
 | `@claude_launched` | Pane | Command already dispatched during this pane's lifetime |
 | `@claude_pending` | Session | At least one pane has a pending resume |
 | `@claude_restoring` | Global session | Launches are blocked while the layout or pending commands are being restored |
+| `@claude-tmux-resurrect-notices` | Global session | Notices raised while no client was attached |
+| `@claude-tmux-resurrect-unrecorded` | Global session | Claude panes without a session ID at the last save that warned about them |
 
 Pending commands and metadata are removed after dispatch. The saved metadata is
 also retained when saving a conversation that is still waiting for attachment.

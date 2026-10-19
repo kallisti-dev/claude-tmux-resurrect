@@ -2,9 +2,66 @@
 # shellcheck shell=bash
 # SPDX-License-Identifier: BSD-3-Clause
 
+# The plugin's bin directory, as an absolute path.
+plugin_bin=$(cd -- "${BASH_SOURCE[0]%/*}/../bin" && pwd)
+
 # Usage: warn MESSAGE...
 # Print MESSAGE on stderr, prefixed with the project name.
 warn() { printf 'claude-tmux-resurrect: %s\n' "$*" >&2; }
+
+# Usage: notify MESSAGE...
+# Warn with MESSAGE, then show it on attached tmux clients a second later:
+# tmux-resurrect shows its own message after running hooks, which would
+# replace an immediate one.
+notify() {
+  local command
+  warn "$*"
+  command="$(quote "$plugin_bin/claude-tmux-resurrect-notify") $(quote "$*")"
+  # run-shell expands formats in its command.
+  tmux run-shell -b -d 1 "${command//#/##}" 2>/dev/null || true
+}
+
+# Usage: show_notice MESSAGE
+# Show MESSAGE on every attached tmux client. With none attached, keep it for
+# the next client that attaches.
+show_notice() {
+  local message="claude-tmux-resurrect: $1" client shown=0 kept
+  while IFS= read -r client; do
+    [[ -n $client ]] || continue
+    # display-message expands formats in its message.
+    tmux display-message -c "$client" -d 5000 "${message//#/##}" 2>/dev/null && shown=1
+  done < <(tmux list-clients -F '#{client_name}' 2>/dev/null)
+  if [[ $shown == 0 ]]; then
+    kept=$(tmux show-options -gqv @claude-tmux-resurrect-notices)
+    tmux set-option -g @claude-tmux-resurrect-notices "${kept:+$kept; }$1"
+  fi
+}
+
+# Usage: show_kept_notices CLIENT
+# Show messages kept while no client was attached on CLIENT.
+show_kept_notices() {
+  local kept
+  kept=$(tmux show-options -gqv @claude-tmux-resurrect-notices)
+  [[ -n $kept ]] || return 0
+  tmux set-option -gu @claude-tmux-resurrect-notices
+  kept="claude-tmux-resurrect: $kept"
+  tmux display-message -c "$1" -d 5000 "${kept//#/##}" 2>/dev/null || true
+}
+
+# Usage: summarize ITEM...
+# Print up to three ITEMs separated by commas, then how many others there are.
+summarize() {
+  local text='' item shown=0
+  for item in "$@"; do
+    if [[ $shown == 3 ]]; then
+      text+=" and $(($# - 3)) more"
+      break
+    fi
+    text+=${text:+, }$item
+    shown=$((shown + 1))
+  done
+  printf '%s' "$text"
+}
 
 # Usage: die MESSAGE...
 # Print MESSAGE as warn does and exit with status 1. Inside $(...), this exits

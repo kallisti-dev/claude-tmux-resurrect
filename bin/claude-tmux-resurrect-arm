@@ -5,8 +5,10 @@ set -euo pipefail
 # shellcheck source=lib/claude-tmux-resurrect.sh
 source "${BASH_SOURCE[0]%/*}/../lib/claude-tmux-resurrect.sh"
 require_tmux
-[[ $# == 1 ]] || die 'usage: claude-tmux-resurrect-arm TMUX_SESSION_ID'
+[[ $# == 1 || $# == 2 ]] || die 'usage: claude-tmux-resurrect-arm TMUX_SESSION_ID [CLIENT]'
 session=$1
+# Attach hooks pass the client, which can show messages kept for it.
+[[ -z ${2:-} ]] || show_kept_notices "$2"
 [[ -n $session ]] || exit 0
 [[ $session =~ ^\$[0-9]+$ ]] || die "claude-tmux-resurrect-arm expects a tmux session ID (\$N), not a name"
 [[ $(tmux show-options -gqv @claude_restoring) != 1 ]] || exit 0
@@ -30,16 +32,17 @@ while IFS= read -r pane; do
   fi
   # Do not type into an editor, copy mode, or another foreground application.
   command=$(tmux display-message -p -t "$pane" '#{pane_current_command}')
+  where=$(tmux display-message -p -t "$pane" '#{session_name}:#{window_index}.#{pane_index}')
   case "$command" in
     bash | zsh | sh | dash | ksh) ;;
     *)
-      warn "pane $pane is not at a supported shell; leaving resume pending"
+      notify "Claude in $where resumes on a later attach, once its pane is at a shell prompt"
       remaining=1
       continue
       ;;
   esac
   if [[ $(tmux display-message -p -t "$pane" '#{pane_in_mode}') != 0 ]]; then
-    warn "pane $pane is in copy mode; leaving resume pending"
+    notify "Claude in $where resumes on a later attach, once its pane leaves copy mode"
     remaining=1
     continue
   fi

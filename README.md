@@ -85,6 +85,10 @@ restart. During restore, it prepares commands without launching detached session
 An already attached session resumes when restore finishes; other sessions resume
 on the first attachment or client switch. Later attachments do not relaunch them.
 
+The plugin reports problems in tmux's message line: for example, when a save
+finds Claude running in a pane without a recorded session ID, or a restore
+cannot resume a saved session.
+
 For a named worktree at `<repo>/.claude/worktrees/<name>`, the command is run from
 `<repo>` using `claude --resume SESSION_ID --worktree NAME`. Other sessions use
 the latest valid absolute `cwd` in their transcript, falling back to the pane's

@@ -625,6 +625,57 @@ class Integration(unittest.TestCase):
         self.assertEqual(len(message), 1)
         self.assertIn(f"claude-tmux-resurrect: {option} wraps", message[0])
 
+    def expect_message(self, text):
+        return wait_until(
+            lambda: [message for message in self.messages() if text in message],
+            f"no message containing {text!r}",
+        )
+
+    def expect_no_new_messages(self, count):
+        # Notices are shown a second after the event that raises them.
+        time.sleep(1.5)
+        self.assertEqual(len(self.messages()), count)
+
+    def test_first_load_notice_is_kept_until_a_client_attaches(self):
+        self.load_plugin()
+        notices = "@claude-tmux-resurrect-notices"
+        wait_until(lambda: self.global_option(notices), "notice was not kept")
+        self.attach()
+        [message] = self.expect_message("start Claude in a new pane")
+        self.assertTrue(message.startswith("claude-tmux-resurrect: loaded"))
+        self.assertEqual(self.global_option(notices), "")
+        self.load_plugin()
+        self.expect_no_new_messages(1)
+
+    def test_save_warns_once_about_claude_panes_without_a_session_id(self):
+        self.load_plugin()
+        self.attach()
+        self.expect_message("loaded")
+        self.write_snapshot()
+        self.script("claude-tmux-resurrect-save", self.snapshot)
+        [message] = self.expect_message("no session ID recorded for Claude")
+        self.assertIn("in work:0.0;", message)
+        self.write_snapshot()
+        self.script("claude-tmux-resurrect-save", self.snapshot)
+        self.expect_no_new_messages(2)
+        self.hook("SessionStart")
+        self.write_snapshot()
+        self.script("claude-tmux-resurrect-save", self.snapshot)
+        self.assertEqual(self.global_option("@claude-tmux-resurrect-unrecorded"), "")
+        self.expect_no_new_messages(2)
+
+    def test_restore_reports_sessions_it_cannot_resume(self):
+        self.save()
+        self.transcript().unlink()
+        self.attach()
+        self.script("claude-tmux-resurrect-post-restore", self.snapshot)
+        [message] = self.expect_message("couldn't resume")
+        self.assertEqual(
+            message,
+            "claude-tmux-resurrect: couldn't resume a saved Claude session: "
+            f"missing or ambiguous transcript for {ID}",
+        )
+
     def test_hook_start_end_and_out_of_order_end(self):
         self.hook("SessionStart")
         self.assertEqual(self.option("@claude_session_id"), ID)
@@ -925,7 +976,7 @@ class Integration(unittest.TestCase):
         )
         self.attach()
         self.assertIn(
-            "not at a supported shell",
+            "once its pane is at a shell prompt",
             self.script("claude-tmux-resurrect-arm", self.session).stderr,
         )
         self.assertNotEqual(self.option("@claude_resume_cmd"), "")
