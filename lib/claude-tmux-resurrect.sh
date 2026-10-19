@@ -88,6 +88,10 @@ require_tmux() {
   [[ -n ${TMUX:-} ]] || die 'run inside tmux (TMUX must identify the intended server)'
 }
 
+# Usage: plugin_version DIR
+# Print the version in the plugin manifest under DIR, or nothing.
+plugin_version() { jq -r '.version // empty' "$1/.claude-plugin/plugin.json" 2>/dev/null || true; }
+
 # Usage: pane_option PANE OPTION
 # Print PANE's own value of OPTION, or nothing if it is unset.
 pane_option() { tmux show-options -pqv -t "$1" "$2"; }

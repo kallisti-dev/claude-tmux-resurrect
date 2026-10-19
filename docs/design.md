@@ -13,13 +13,17 @@ registers the resurrect and tmux callbacks and adds the plugin directory to
 directory listed in that variable in place, as a session-only plugin, so Claude
 sessions started in new panes run `hooks/hooks.json` from the same directory as
 the tmux callbacks. The two halves therefore always come from the same files,
-and the pane options under [transient tmux state](#transient-tmux-state) are
+and the tmux options under [transient tmux state](#transient-tmux-state) are
 their only interface.
 
 Setup records the directory it listed and replaces that entry when the plugin
 moves, keeping entries that something else added. A process keeps the
 environment it started with, so Claude sessions in panes opened before the
-plugin loaded do not load its hooks.
+plugin loaded do not load its hooks. For the same reason, a pane opened before
+the plugin moved, such as after a Nix rebuild replaced its store path, starts
+Claude with the earlier copy. The SessionStart hook compares its own manifest
+version with the one setup recorded, and reports a difference once per pair of
+versions.
 
 ## Save and restore
 
@@ -57,6 +61,7 @@ every attached client, as well as on stderr:
   set of panes changes, because automatic saves repeat
 - saved sessions that a restore cannot resume, with the first reason
 - pending resumes left for a later attach because a pane is busy or in copy mode
+- a Claude session that loaded a copy of the plugin with another version
 
 tmux-resurrect shows its own message after running its hooks, so a notice is
 scheduled to appear one second after the event, for five seconds. If no client
@@ -133,13 +138,15 @@ integration. There is no network service or telemetry in these scripts.
 | `@claude_restoring` | Global session | Launches are blocked while the layout or pending commands are being restored |
 | `@claude-tmux-resurrect-notices` | Global session | Notices raised while no client was attached |
 | `@claude-tmux-resurrect-unrecorded` | Global session | Claude panes without a session ID at the last save that warned about them |
+| `@claude-tmux-resurrect-mismatch` | Global session | Plugin versions in the last mismatch reported at SessionStart |
 
 Pending commands and metadata are removed after dispatch. The saved metadata is
 also retained when saving a conversation that is still waiting for attachment.
 
 Setup keeps previous and managed hook values, array slots, and expected handler
 text in global `@claude-tmux-resurrect-*` options, and the directory it listed in
-`CLAUDE_CODE_PLUGIN_DIRS` in `@claude-tmux-resurrect-dir`. These describe the
+`CLAUDE_CODE_PLUGIN_DIRS` and its version in `@claude-tmux-resurrect-dir` and
+`@claude-tmux-resurrect-version`. These describe the
 running server's registrations. Removing a callback from the configuration file
 alone does not clear a value setup previously captured; see
 [replacing shared hooks](troubleshooting.md#replacing-or-removing-a-shared-hook).

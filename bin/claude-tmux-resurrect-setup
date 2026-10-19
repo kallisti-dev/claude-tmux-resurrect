@@ -156,6 +156,7 @@ if [[ ${1:-} == --remove ]]; then
   listed=$(option "$prefix-dir")
   [[ -z $listed ]] || update_plugin_dirs "$listed"
   tmux set-option -gu "$prefix-dir"
+  tmux set-option -gu "$prefix-version"
 else
   [[ $plugin_dir != *:* ]] || die "$variable cannot list a directory whose path contains ':': $plugin_dir"
   register_resurrect_hook post-save-layout claude-tmux-resurrect-save
@@ -172,6 +173,8 @@ else
   listed=$(option "$prefix-dir")
   update_plugin_dirs "$listed" "$plugin_dir"
   tmux set-option -g "$prefix-dir" "$plugin_dir"
+  # The Claude hook compares its own version with this one.
+  tmux set-option -g "$prefix-version" "$(plugin_version "$plugin_dir")"
   # Existing panes keep the environment they started with. When tmux starts,
   # the configuration loads before any pane exists.
   if [[ -z $listed && -n $(tmux list-panes -a -F . 2>/dev/null) ]]; then

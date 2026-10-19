@@ -20,6 +20,21 @@ case "$event" in
     tmux set-option -p -t "$TMUX_PANE" @claude_session_id "$id"
     tmux set-option -pu -t "$TMUX_PANE" @claude_resume_cmd
     tmux set-option -pu -t "$TMUX_PANE" @claude_resume_data
+    # A pane keeps the CLAUDE_CODE_PLUGIN_DIRS it started with, so Claude can
+    # load an earlier copy of the plugin than this tmux server runs, such as a
+    # replaced Nix store path. Report copies whose versions differ.
+    dir=${plugin_bin%/bin}
+    loaded=$(tmux show-options -gqv @claude-tmux-resurrect-dir)
+    if [[ -n $loaded && $loaded != "$dir" ]]; then
+      version=$(plugin_version "$dir")
+      expected=$(tmux show-options -gqv @claude-tmux-resurrect-version)
+      mismatch="$version $expected"
+      if [[ $version != "$expected" && $mismatch != "$(tmux show-options -gqv @claude-tmux-resurrect-mismatch)" ]]; then
+        tmux set-option -g @claude-tmux-resurrect-mismatch "$mismatch"
+        where=$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}:#{window_index}.#{pane_index}')
+        notify "Claude in $where loaded plugin version ${version:-unknown}, but tmux runs ${expected:-unknown}; start Claude in a new pane"
+      fi
+    fi
     ;;
   SessionEnd)
     # Compare and clear on the server without yielding to a newer start event.

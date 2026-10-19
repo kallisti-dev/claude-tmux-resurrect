@@ -676,6 +676,30 @@ class Integration(unittest.TestCase):
             f"missing or ambiguous transcript for {ID}",
         )
 
+    def test_session_start_reports_a_plugin_copy_with_another_version(self):
+        self.load_plugin()
+        self.attach()
+        self.expect_message("loaded")
+        payload = json.dumps({"hook_event_name": "SessionStart", "session_id": ID})
+        manifest = json.loads((PLUGIN_ROOT / ".claude-plugin/plugin.json").read_text())
+        for name, version in [
+            ("same version", manifest["version"]),
+            ("older", "0.0.1"),
+        ]:
+            copy = self.base / name
+            self.copy_plugin(copy)
+            (copy / ".claude-plugin/plugin.json").write_text(
+                json.dumps(dict(manifest, version=version))
+            )
+            self.run_command(
+                [str(copy / "bin/claude-tmux-resurrect-hook")], data=payload
+            )
+        [message] = self.expect_message("loaded plugin version 0.0.1")
+        self.assertIn(f"but tmux runs {manifest['version']};", message)
+        self.run_command([str(copy / "bin/claude-tmux-resurrect-hook")], data=payload)
+        self.expect_no_new_messages(2)
+        self.assertEqual(self.option("@claude_session_id"), ID)
+
     def test_hook_start_end_and_out_of_order_end(self):
         self.hook("SessionStart")
         self.assertEqual(self.option("@claude_session_id"), ID)
