@@ -1,18 +1,14 @@
 {
-  description = "Exact, deferred Claude Code session restoration for tmux-resurrect";
+  description = "tmux plugin that restores Claude Code conversations with tmux-resurrect";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    home-manager = {
-      url = "github:nix-community/home-manager";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    nix-darwin = {
-      url = "github:nix-darwin/nix-darwin";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
     resurrect = {
       url = "github:tmux-plugins/tmux-resurrect";
+      flake = false;
+    };
+    tpm = {
+      url = "github:tmux-plugins/tpm";
       flake = false;
     };
   };
@@ -20,9 +16,8 @@
   outputs =
     {
       nixpkgs,
-      home-manager,
-      nix-darwin,
       resurrect,
+      tpm,
       ...
     }:
     let
@@ -47,7 +42,6 @@
             [
               python3
               git
-              gnumake
               gnused
               gnugrep
               gawk
@@ -62,6 +56,7 @@
             ruff
           ];
           package = pkgs.callPackage ./package.nix { };
+          scripts = "claude-tmux-resurrect.tmux bin/* lib/*.sh";
           check =
             name: deps: command:
             pkgs.runCommand name { nativeBuildInputs = deps; } ''
@@ -73,54 +68,32 @@
             '';
           behavior = ''
             # Darwin's build sandbox cannot execute /usr/bin/env. Patch only
-            # disposable test copies; the normal installation remains portable.
-            export INSTALL_SOURCE=${./.}
-            patchShebangs --build bin
+            # disposable test copies; the plugin itself remains portable.
+            patchShebangs --build claude-tmux-resurrect.tmux bin
             cp -R ${resurrect} "$TMPDIR/resurrect"
-            chmod -R u+w "$TMPDIR/resurrect"
-            patchShebangs --build "$TMPDIR/resurrect"
-            export RESURRECT_SOURCE="$TMPDIR/resurrect"
+            cp -R ${tpm} "$TMPDIR/tpm"
+            chmod -R u+w "$TMPDIR/resurrect" "$TMPDIR/tpm"
+            patchShebangs --build "$TMPDIR/resurrect" "$TMPDIR/tpm"
+            export RESURRECT_SOURCE="$TMPDIR/resurrect" TPM_SOURCE="$TMPDIR/tpm"
             python3 -m unittest discover -s tests -v -f
           '';
           individualChecks = {
             formatting = check "formatting" qualityTools ''
-              nixfmt --check *.nix nix/*.nix tests/*.nix
-              shfmt -d -i 2 -ci bin/* share/claude-tmux-resurrect/lib.sh
+              nixfmt --check *.nix
+              shfmt -d -i 2 -ci ${scripts}
               ruff format --check tests
             '';
             lint = check "lint" (runtime ++ qualityTools) ''
-              shellcheck -x bin/* share/claude-tmux-resurrect/lib.sh
+              shellcheck -x ${scripts}
               ruff check tests
-              jq -e . examples/claude-hooks.json >/dev/null
+              jq -e . .claude-plugin/plugin.json hooks/hooks.json >/dev/null
               actionlint .github/workflows/*.yml
             '';
             behavior = check "behavior" (runtime ++ testTools) behavior;
             packaging = check "packaging" (runtime ++ testTools) ''
-              export PROJECT_BIN=${package}/bin
+              export PLUGIN_ROOT=${package}/share/tmux-plugins/claude-tmux-resurrect
               ${behavior}
             '';
-            modules = import ./tests/modules.nix {
-              inherit
-                pkgs
-                home-manager
-                nixpkgs
-                package
-                ;
-              module = ./nix/home-manager.nix;
-            };
-            nixos-module = import ./tests/nixos-module.nix {
-              inherit pkgs nixpkgs package;
-              module = ./nix/nixos.nix;
-            };
-            darwin-module = import ./tests/darwin-module.nix {
-              inherit
-                pkgs
-                nixpkgs
-                nix-darwin
-                package
-                ;
-              module = ./nix/darwin.nix;
-            };
             nonflake =
               let
                 pinnedPackage = import ./default.nix { inherit system; };
@@ -160,14 +133,12 @@
                 pkgs.direnv
               ];
             RESURRECT_SOURCE = "${resurrect}";
+            TPM_SOURCE = "${tpm}";
           };
           formatter = pkgs.nixfmt;
         };
     in
     {
-      homeManagerModules.default = ./nix/home-manager.nix;
-      nixosModules.default = ./nix/nixos.nix;
-      darwinModules.default = ./nix/darwin.nix;
       packages = eachSystem (system: (forSystem system).packages);
       checks = eachSystem (system: (forSystem system).checks);
       devShells = eachSystem (system: (forSystem system).devShells);

@@ -2,8 +2,8 @@
 # Prepare Claude resume commands after tmux layout restoration.
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
-# shellcheck source=share/claude-tmux-resurrect/lib.sh
-source "${BASH_SOURCE[0]%/*}/../share/claude-tmux-resurrect/lib.sh"
+# shellcheck source=lib/claude-tmux-resurrect.sh
+source "${BASH_SOURCE[0]%/*}/../lib/claude-tmux-resurrect.sh"
 require_tmux
 [[ $# -le 1 ]] || die 'usage: claude-tmux-resurrect-post-restore [SNAPSHOT]'
 # Resurrect navigates through sessions while restoring its layout. Stage only

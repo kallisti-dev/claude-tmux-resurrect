@@ -2,8 +2,8 @@
 # Record and clear Claude session IDs on tmux panes.
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
-# shellcheck source=share/claude-tmux-resurrect/lib.sh
-source "${BASH_SOURCE[0]%/*}/../share/claude-tmux-resurrect/lib.sh"
+# shellcheck source=lib/claude-tmux-resurrect.sh
+source "${BASH_SOURCE[0]%/*}/../lib/claude-tmux-resurrect.sh"
 
 # Claude also runs outside tmux; that is a successful no-op.
 [[ -n ${TMUX_PANE:-} && -n ${TMUX:-} ]] || exit 0

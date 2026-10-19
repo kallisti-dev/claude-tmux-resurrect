@@ -2,8 +2,8 @@
 # Save exact Claude session mappings in a tmux-resurrect snapshot.
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
-# shellcheck source=share/claude-tmux-resurrect/lib.sh
-source "${BASH_SOURCE[0]%/*}/../share/claude-tmux-resurrect/lib.sh"
+# shellcheck source=lib/claude-tmux-resurrect.sh
+source "${BASH_SOURCE[0]%/*}/../lib/claude-tmux-resurrect.sh"
 require_tmux
 need mktemp mv rm
 [[ $# == 1 && -f $1 && ! -L $1 ]] || die 'usage: claude-tmux-resurrect-save SNAPSHOT (a regular resurrect snapshot, not a symlink)'

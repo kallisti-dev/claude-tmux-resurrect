@@ -1,0 +1,10 @@
+{
+  "name": "tmux-resurrect",
+  "version": "0.1.0",
+  "description": "Session hooks for claude-tmux-resurrect, a tmux plugin that restores Claude Code conversations with tmux-resurrect",
+  "author": { "name": "Adam Curtis" },
+  "homepage": "https://github.com/kallisti-dev/claude-tmux-resurrect",
+  "repository": "https://github.com/kallisti-dev/claude-tmux-resurrect",
+  "license": "BSD-3-Clause",
+  "keywords": ["tmux", "tmux-resurrect", "sessions"]
+}

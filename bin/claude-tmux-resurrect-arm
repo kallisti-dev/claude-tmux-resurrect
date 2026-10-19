@@ -2,8 +2,8 @@
 # Resume pending Claude conversations when their tmux session is attached.
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
-# shellcheck source=share/claude-tmux-resurrect/lib.sh
-source "${BASH_SOURCE[0]%/*}/../share/claude-tmux-resurrect/lib.sh"
+# shellcheck source=lib/claude-tmux-resurrect.sh
+source "${BASH_SOURCE[0]%/*}/../lib/claude-tmux-resurrect.sh"
 require_tmux
 [[ $# == 1 ]] || die 'usage: claude-tmux-resurrect-arm TMUX_SESSION_ID'
 session=$1

@@ -4,21 +4,20 @@
 
 The flake supports Apple Silicon macOS and Linux (`aarch64-darwin`,
 `aarch64-linux`, and `x86_64-linux`). Its pinned nixpkgs does not support Intel
-macOS; the ordinary shell installation is untested there.
+macOS; the TPM installation is untested there.
 
 One foreground Claude conversation per pane is supported. Fish, Nushell, native
 Windows, and remote Claude processes are unsupported. Linux under WSL2 is
 untested.
 
-Organization-managed Claude Code settings are unsupported. By default, Claude
-Code [applies only the highest-priority managed
-source](https://code.claude.com/docs/en/managed-settings#how-claude-code-combines-managed-sources).
-Server-managed settings, from the claude.ai admin console or a Claude apps
-gateway, and MDM policies rank above managed settings files, so Claude Code
-ignores the hooks installed by the NixOS and nix-darwin modules when either
-applies. Managed policies can also block the hooks: `allowManagedHooksOnly`
-stops hooks in user settings from running, and `disableAllHooks` stops all
-hooks. `/status` shows which managed source Claude Code uses.
+Claude Code loads the plugin's hooks through `CLAUDE_CODE_PLUGIN_DIRS`, which
+requires version 2.1.280 or later; earlier versions ignore the variable, so
+their sessions are not tracked. Organization policies that stop these hooks are
+unsupported: [managed settings](https://code.claude.com/docs/en/managed-settings)
+can turn off plugins loaded from `CLAUDE_CODE_PLUGIN_DIRS`, `allowManagedHooksOnly`
+runs only hooks from managed settings and the plugins they force-enable, and
+`disableAllHooks` stops all hooks. `/status` shows which managed settings Claude
+Code uses.
 
 ## Testing limits
 

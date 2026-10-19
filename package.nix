@@ -1,31 +1,35 @@
 {
   lib,
-  stdenvNoCC,
+  tmuxPlugins,
   makeWrapper,
   bash,
   tmux,
   jq,
   coreutils,
 }:
-stdenvNoCC.mkDerivation {
-  pname = "claude-tmux-resurrect";
-  version = "0.1.0";
+tmuxPlugins.mkTmuxPlugin {
+  pluginName = "claude-tmux-resurrect";
+  # The default file name replaces hyphens with underscores.
+  rtpFilePath = "claude-tmux-resurrect.tmux";
+  inherit (lib.importJSON ./.claude-plugin/plugin.json) version;
   src = lib.fileset.toSource {
     root = ./.;
     fileset = lib.fileset.unions [
-      ./Makefile
+      ./.claude-plugin/plugin.json
+      ./claude-tmux-resurrect.tmux
       ./bin
-      ./share/claude-tmux-resurrect/lib.sh
-      ./examples
+      ./hooks
+      ./lib
       ./LICENSE.md
     ];
   };
   nativeBuildInputs = [ makeWrapper ];
-  dontBuild = true;
-  installPhase = ''
-    runHook preInstall
-    make install PREFIX="$out"
-    for script in "$out"/bin/*; do
+  # mkTmuxPlugin sets strictDeps, so patchShebangs finds bash only here.
+  buildInputs = [ bash ];
+  # tmux and Claude run these scripts by path with their own PATH.
+  postInstall = ''
+    plugin=$out/share/tmux-plugins/claude-tmux-resurrect
+    for script in "$plugin"/claude-tmux-resurrect.tmux "$plugin"/bin/*; do
       wrapProgram "$script" --prefix PATH : ${
         lib.makeBinPath [
           bash
@@ -35,10 +39,10 @@ stdenvNoCC.mkDerivation {
         ]
       }
     done
-    runHook postInstall
   '';
   meta = {
-    description = "Resume exact Claude Code sessions when restored tmux sessions are attached";
+    description = "tmux plugin that restores Claude Code conversations with tmux-resurrect";
+    homepage = "https://github.com/kallisti-dev/claude-tmux-resurrect";
     license = lib.licenses.bsd3;
     platforms = [
       "aarch64-darwin"

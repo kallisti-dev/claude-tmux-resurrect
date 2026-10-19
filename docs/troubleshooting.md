@@ -1,6 +1,11 @@
 # Troubleshooting
 
-Run these commands inside the affected tmux server.
+Run these commands inside the affected tmux server. The scripts are in the
+plugin's `bin` directory, which setup records in a tmux option:
+
+```sh
+plugin=$(tmux show-options -gqv @claude-tmux-resurrect-dir)
+```
 
 ## No session was saved
 
@@ -10,8 +15,17 @@ Inspect the current pane:
 tmux show-options -pqv @claude_session_id
 ```
 
-An empty value means the hook has not run in that pane. Check hook configuration
-and PATH, then start or resume Claude and save again.
+An empty value means Claude's session hook has not run in that pane. Claude
+loads the hook only when the pane's environment lists the plugin directory,
+which is true of panes opened after the plugin loaded. Check in the pane's
+shell:
+
+```sh
+printenv CLAUDE_CODE_PLUGIN_DIRS
+```
+
+In Claude Code, `/plugin` lists the hook's plugin as `tmux-resurrect@inline`.
+Start or resume Claude in a pane that lists the directory, then save again.
 
 ## No resume after attach
 
@@ -22,9 +36,9 @@ tmux show-options -pqv @claude_resume_cmd
 tmux show-options -gqv @claude_restoring
 ```
 
-Run `claude-tmux-resurrect-post-restore` manually inside tmux and check its stderr.
-Missing transcripts, deleted directories, ambiguous IDs, and invalid metadata
-produce diagnostics and are skipped.
+Run `"$plugin"/bin/claude-tmux-resurrect-post-restore` inside tmux and check its
+stderr. Missing transcripts, deleted directories, ambiguous IDs, and invalid
+metadata produce diagnostics and are skipped.
 
 ## Restore was interrupted
 
@@ -33,7 +47,7 @@ snapshot again:
 
 ```sh
 tmux set-option -gu @claude_restoring
-claude-tmux-resurrect-post-restore
+"$plugin"/bin/claude-tmux-resurrect-post-restore
 ```
 
 ## Replacing or removing a shared hook
@@ -43,13 +57,13 @@ one from the configuration file does not remove that captured value on reload.
 Reset setup before changing those callbacks:
 
 ```sh
-claude-tmux-resurrect-setup --remove
+"$plugin"/bin/claude-tmux-resurrect-setup --remove
 ```
 
-Edit the source configuration, keeping callback definitions before the setup call,
-then reload it. Removal restores the previous resurrect options; if the new
-configuration no longer sets one, explicitly unset that option before reloading.
-For example, when removing a previous post-save callback:
+Edit the source configuration, keeping callback definitions before the plugin
+loads, then reload it. Removal restores the previous resurrect options; if the
+new configuration no longer sets one, explicitly unset that option before
+reloading. For example, when removing a previous post-save callback:
 
 ```sh
 tmux set-option -gu @resurrect-hook-post-save-layout
@@ -77,13 +91,14 @@ Return it to an empty shell prompt, exit copy mode, then detach and attach again
 or run:
 
 ```sh
-claude-tmux-resurrect-arm "$(tmux display-message -p '#{session_id}')"
+"$plugin"/bin/claude-tmux-resurrect-arm "$(tmux display-message -p '#{session_id}')"
 ```
 
 ## Dependency not found
 
 Make the named executable available on the tmux server's PATH. Claude must also
-be available on the pane shell's PATH.
+be available on the pane shell's PATH. The Nix package supplies its other
+dependencies itself.
 
 ## A dispatched command failed
 
@@ -93,7 +108,7 @@ from the snapshot, first clear the dispatched flag on that pane:
 
 ```sh
 tmux set-option -pu @claude_launched
-claude-tmux-resurrect-post-restore
+"$plugin"/bin/claude-tmux-resurrect-post-restore
 ```
 
 See [compatibility and limitations](compatibility.md) for unsupported setups and

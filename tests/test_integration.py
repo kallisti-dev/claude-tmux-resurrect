@@ -11,13 +11,25 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-INSTALL_SOURCE = Path(os.environ.get("INSTALL_SOURCE", ROOT))
-BIN = Path(os.environ.get("PROJECT_BIN", ROOT / "bin"))
+# The packaging check points this at the built plugin instead of the source.
+PLUGIN_ROOT = Path(os.environ.get("PLUGIN_ROOT", ROOT))
+PLUGIN_FILES = ["claude-tmux-resurrect.tmux", "bin", "lib", "hooks", ".claude-plugin"]
+BIN = PLUGIN_ROOT / "bin"
+ENTRY = PLUGIN_ROOT / "claude-tmux-resurrect.tmux"
 BASH = shutil.which("bash")
 TMUX = shutil.which("tmux")
 PYTHON = shutil.which("python3")
+GIT = shutil.which("git")
 RESURRECT = os.environ.get("RESURRECT_SOURCE")
+TPM = os.environ.get("TPM_SOURCE")
 ID = "11111111-2222-3333-4444-555555555555"
+
+
+def system_plugins():
+    try:
+        return "@plugin" in Path("/etc/tmux.conf").read_text()
+    except OSError:
+        return False
 
 
 def wait_until(predicate, message, timeout=8):
@@ -207,14 +219,17 @@ class Integration(unittest.TestCase):
 
     def attach(self, session="work"):
         env = {k: v for k, v in self.env.items() if k not in {"TMUX", "TMUX_PANE"}}
-        client = subprocess.Popen(
-            [TMUX, "-S", str(self.socket), "-C", "attach-session", "-t", session],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-        )
+        # Control-mode output, including %message lines, is kept for messages().
+        output = self.base / f"client-{len(self.clients)}.out"
+        with output.open("w") as stream:
+            client = subprocess.Popen(
+                [TMUX, "-S", str(self.socket), "-C", "attach-session", "-t", session],
+                stdin=subprocess.PIPE,
+                stdout=stream,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
         self.clients.append(client)
         wait_until(
             lambda: (
@@ -226,6 +241,15 @@ class Integration(unittest.TestCase):
             "client did not attach",
         )
         return client
+
+    def messages(self):
+        # display-message reaches control-mode clients as %message lines.
+        return [
+            line.removeprefix("%message ")
+            for path in sorted(self.base.glob("client-*.out"))
+            for line in path.read_text().splitlines()
+            if line.startswith("%message ")
+        ]
 
     def launches(self):
         return (
@@ -239,15 +263,19 @@ class Integration(unittest.TestCase):
         self.assertEqual(len(self.launches()), count)
         return self.launches()
 
-    def load_hooks(self):
-        readme = (ROOT / "README.md").read_text()
-        configuration = readme.split("```tmux\n", 1)[1].split("```", 1)[0]
-        config = self.base / "integration.conf"
-        config.write_text(configuration)
-        self.tmux("source-file", str(config))
+    def load_plugin(self, entry=ENTRY):
+        # run-shell expands formats in its command before the shell runs it.
+        self.tmux("run-shell", shlex.quote(str(entry)).replace("#", "##"))
 
     def global_option(self, name):
         return self.tmux("show", "-gqv", name).stdout.strip()
+
+    def plugin_dirs(self):
+        result = self.tmux(
+            "show-environment", "-g", "CLAUDE_CODE_PLUGIN_DIRS", check=False
+        )
+        _, separator, value = result.stdout.rstrip("\n").partition("=")
+        return value if result.returncode == 0 and separator else None
 
     def native_hooks(self, event):
         return self.tmux("show-hooks", "-g", event).stdout.splitlines()
@@ -298,23 +326,39 @@ class Integration(unittest.TestCase):
             for line in (self.base / "previous.jsonl").read_text().splitlines()
         ]
 
-    def copy_scripts(self, destination):
+    def run_with_git(self, *args):
+        # Keep host Git configuration out of test repositories and clones.
+        return self.run_command(
+            [str(arg) for arg in args],
+            env=dict(
+                self.env,
+                GIT_CONFIG_NOSYSTEM="1",
+                GIT_AUTHOR_NAME="Test",
+                GIT_AUTHOR_EMAIL="test@example.invalid",
+                GIT_COMMITTER_NAME="Test",
+                GIT_COMMITTER_EMAIL="test@example.invalid",
+            ),
+        )
+
+    def git(self, directory, *args):
+        return self.run_with_git(GIT, "-C", directory, *args)
+
+    def copy_plugin(self, destination):
         # A Nix wrapper runs its wrapped script from the store, so copy the
         # wrapped script itself; the copy then runs from where it is.
-        (destination / "bin").mkdir(parents=True)
-        for script in BIN.iterdir():
-            if script.name.startswith("."):
-                continue
-            wrapped = BIN / f".{script.name}-wrapped"
-            copied = destination / "bin" / script.name
-            shutil.copyfile(wrapped if wrapped.is_file() else script, copied)
-            copied.chmod(0o755)
-        library = destination / "share/claude-tmux-resurrect/lib.sh"
-        library.parent.mkdir(parents=True)
-        shutil.copyfile(BIN.parent / "share/claude-tmux-resurrect/lib.sh", library)
+        for name in PLUGIN_FILES:
+            source = PLUGIN_ROOT / name
+            for path in [source] if source.is_file() else sorted(source.iterdir()):
+                if path.name.startswith("."):
+                    continue
+                wrapped = path.with_name(f".{path.name}-wrapped")
+                copied = destination / path.relative_to(PLUGIN_ROOT)
+                copied.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(wrapped if wrapped.is_file() else path, copied)
+                copied.chmod(0o755 if os.access(path, os.X_OK) else 0o644)
 
     def test_setup_registers_guarded_commands_and_rejects_recapturing_them(self):
-        self.load_hooks()
+        self.load_plugin()
         for phase, script in [
             ("post-save-layout", "claude-tmux-resurrect-save"),
             ("pre-restore-all", "claude-tmux-resurrect-pre-restore"),
@@ -346,13 +390,13 @@ class Integration(unittest.TestCase):
                 "set-option -g @foreign-handler yes",
             )
             foreign[event] = self.native_hooks(event)
-        self.load_hooks()
+        self.load_plugin()
         installed_hooks = {event: self.native_hooks(event) for event in foreign}
         installed_save = self.global_option("@resurrect-hook-post-save-layout")
         for event, handlers in installed_hooks.items():
             self.assertEqual(len(handlers), len(foreign[event]) + 1)
             self.assertTrue(set(foreign[event]).issubset(handlers))
-        self.load_hooks()
+        self.load_plugin()
         self.assertEqual(
             self.global_option("@resurrect-hook-post-save-layout"), installed_save
         )
@@ -371,12 +415,12 @@ class Integration(unittest.TestCase):
                 "set-option -g @replacement-handler yes",
             )
             replacements[event] = self.native_hooks(event)
-        self.load_hooks()
+        self.load_plugin()
         recovered = {event: self.native_hooks(event) for event in foreign}
         for event, handlers in recovered.items():
             self.assertEqual(len(handlers), len(replacements[event]) + 1)
             self.assertTrue(set(replacements[event]).issubset(handlers))
-        self.load_hooks()
+        self.load_plugin()
         for event, handlers in recovered.items():
             self.assertEqual(self.native_hooks(event), handlers)
 
@@ -412,7 +456,7 @@ class Integration(unittest.TestCase):
                 "@resurrect-hook-" + phase,
                 self.previous_hook(label, status=status),
             )
-        self.load_hooks()
+        self.load_plugin()
         self.execute_resurrect_hook("post-save-layout", self.snapshot)
         self.assertEqual(self.records()[0]["session_id"], ID)
         self.hook("SessionEnd")
@@ -448,7 +492,7 @@ class Integration(unittest.TestCase):
                 "set-option -g @foreign-handler yes",
             )
             foreign[event] = self.native_hooks(event)
-        self.load_hooks()
+        self.load_plugin()
         self.script("claude-tmux-resurrect-setup", "--remove")
         self.script("claude-tmux-resurrect-setup", "--remove")
         for phase, original in previous.items():
@@ -456,7 +500,7 @@ class Integration(unittest.TestCase):
         for event, handlers in foreign.items():
             self.assertEqual(self.native_hooks(event), handlers)
 
-        self.load_hooks()
+        self.load_plugin()
         external = "set-option -g @external-handler yes"
         self.tmux("set", "-g", "@resurrect-hook-post-save-layout", external)
         for event in foreign:
@@ -472,26 +516,17 @@ class Integration(unittest.TestCase):
         for event, handlers in changed.items():
             self.assertEqual(self.native_hooks(event), handlers)
 
-    def test_setup_path_upgrade_replaces_owned_registration(self):
+    def test_moving_the_plugin_replaces_its_registrations(self):
         self.tmux(
             "set", "-g", "@resurrect-hook-post-save-layout", self.previous_hook("save")
         )
-        first = self.base / "install one ' $ #"
-        second = self.base / "install two ' $ #"
+        self.tmux("set-environment", "-g", "CLAUDE_CODE_PLUGIN_DIRS", "/other/plugins")
+        first = self.base / "plugin one ' $ #"
+        second = self.base / "plugin two ' $ #"
         installed_hooks = None
-        for prefix in [first, second]:
-            # Make consumes $$ itself; the shell preserves a dollar followed
-            # by a space inside the quoted destination in the install recipe.
-            self.run_command(
-                [
-                    "make",
-                    "-C",
-                    str(ROOT),
-                    "install",
-                    f"PREFIX={str(prefix).replace('$', '$$')}",
-                ]
-            )
-            self.run_command([BASH, str(prefix / "bin/claude-tmux-resurrect-setup")])
+        for directory in [first, second]:
+            self.copy_plugin(directory)
+            self.load_plugin(directory / "claude-tmux-resurrect.tmux")
             hooks = {
                 event: [
                     handler.split(" ", 1)[0] for handler in self.native_hooks(event)
@@ -502,6 +537,7 @@ class Integration(unittest.TestCase):
                 installed_hooks = hooks
             else:
                 self.assertEqual(hooks, installed_hooks)
+            self.assertEqual(self.plugin_dirs(), f"/other/plugins:{directory}")
         shutil.rmtree(first)
         self.transcript()
         self.hook("SessionStart")
@@ -519,8 +555,8 @@ class Integration(unittest.TestCase):
             "set", "-g", "@resurrect-hook-post-save-layout", self.previous_hook("save")
         )
         copy = self.base / "deleted copy"
-        self.copy_scripts(copy)
-        self.run_command([BASH, str(copy / "bin/claude-tmux-resurrect-setup")])
+        self.copy_plugin(copy)
+        self.load_plugin(copy / "claude-tmux-resurrect.tmux")
         shutil.rmtree(copy)
         self.write_snapshot()
         original = self.snapshot.read_bytes()
@@ -537,6 +573,57 @@ class Integration(unittest.TestCase):
             # Run the registered command synchronously to observe its status.
             self.tmux("run-shell", handler[2])
 
+    def test_new_panes_list_the_plugin_beside_other_plugin_directories(self):
+        self.tmux("set-environment", "-g", "CLAUDE_CODE_PLUGIN_DIRS", "/other/plugins")
+        self.load_plugin()
+        self.load_plugin()
+        listed = f"/other/plugins:{PLUGIN_ROOT}"
+        self.assertEqual(self.plugin_dirs(), listed)
+        self.assertEqual(
+            self.global_option("@claude-tmux-resurrect-dir"), str(PLUGIN_ROOT)
+        )
+        output = self.base / "pane environment"
+        self.tmux(
+            "new-window",
+            "-d",
+            f"printenv CLAUDE_CODE_PLUGIN_DIRS > {shlex.quote(str(output))}",
+        )
+        wait_until(
+            lambda: output.is_file() and output.read_text().endswith("\n"),
+            "new pane did not write its environment",
+        )
+        self.assertEqual(output.read_text(), listed + "\n")
+        self.script("claude-tmux-resurrect-setup", "--remove")
+        self.assertEqual(self.plugin_dirs(), "/other/plugins")
+        self.assertEqual(self.global_option("@claude-tmux-resurrect-dir"), "")
+
+    def test_remove_unsets_a_plugin_list_with_only_this_plugin(self):
+        self.load_plugin()
+        self.assertEqual(self.plugin_dirs(), str(PLUGIN_ROOT))
+        self.script("claude-tmux-resurrect-setup", "--remove")
+        self.assertIsNone(self.plugin_dirs())
+
+    def test_plugin_directory_with_a_colon_is_rejected(self):
+        copy = self.base / "plugin:copy"
+        self.copy_plugin(copy)
+        result = self.run_command(
+            [str(copy / "bin/claude-tmux-resurrect-setup")], check=False
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("contains ':'", result.stderr)
+        self.assertIsNone(self.plugin_dirs())
+        self.assertEqual(self.global_option("@resurrect-hook-post-save-layout"), "")
+
+    def test_entry_shows_setup_failures_on_attached_clients(self):
+        self.attach()
+        option = "@resurrect-hook-post-save-layout"
+        self.tmux("set", "-g", option, "__claude_tmux_resurrect_post_save_layout")
+        result = self.tmux("run-shell", shlex.quote(str(ENTRY)), check=False)
+        self.assertNotEqual(result.returncode, 0)
+        message = wait_until(self.messages, "setup failure was not displayed")
+        self.assertEqual(len(message), 1)
+        self.assertIn(f"claude-tmux-resurrect: {option} wraps", message[0])
+
     def test_hook_start_end_and_out_of_order_end(self):
         self.hook("SessionStart")
         self.assertEqual(self.option("@claude_session_id"), ID)
@@ -550,7 +637,7 @@ class Integration(unittest.TestCase):
         # Nix wrappers prepend tmux on PATH. Copy the scripts so both source
         # and package checks can interpose the proxy.
         copied = self.base / "hook-under-test"
-        self.copy_scripts(copied)
+        self.copy_plugin(copied)
         hook = copied / "bin/claude-tmux-resurrect-hook"
         marker = self.base / "interleaved-start"
         proxy = self.stubdir / "tmux"
@@ -637,7 +724,7 @@ class Integration(unittest.TestCase):
 
     def test_exact_resume_is_deferred_then_fires_once(self):
         self.save()
-        self.load_hooks()
+        self.load_plugin()
         self.script("claude-tmux-resurrect-post-restore", self.snapshot)
         self.script("claude-tmux-resurrect-arm", self.session)
         self.assertEqual(self.launches(), [])
@@ -669,7 +756,7 @@ class Integration(unittest.TestCase):
         changed = self.home / "quote' space $(touch INJECTED) `false` \\ path"
         changed.mkdir()
         self.save(changed, session=session)
-        self.load_hooks()
+        self.load_plugin()
         self.script("claude-tmux-resurrect-post-restore", self.snapshot)
         self.attach(session)
         self.assertEqual(self.expect_launches(1)[0]["cwd"], str(changed.resolve()))
@@ -769,7 +856,7 @@ class Integration(unittest.TestCase):
 
     def test_restore_gate_ignores_intermediate_session_switches(self):
         self.save()
-        self.load_hooks()
+        self.load_plugin()
         self.script("claude-tmux-resurrect-post-restore", self.snapshot)
         self.script("claude-tmux-resurrect-pre-restore")
         self.assertEqual(
@@ -786,7 +873,7 @@ class Integration(unittest.TestCase):
 
     def test_switching_client_to_pending_session_launches(self):
         self.save()
-        self.load_hooks()
+        self.load_plugin()
         self.tmux("new-session", "-d", "-s", "other", "-c", str(self.cwd))
         self.attach("other")
         self.script("claude-tmux-resurrect-post-restore", self.snapshot)
@@ -953,33 +1040,58 @@ class Integration(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("required command not found on PATH: jq", result.stderr)
 
-    def test_normal_install_works_in_prefix_with_spaces(self):
-        prefix = self.base / "install space"
-        self.run_command(
-            ["make", "-C", str(INSTALL_SOURCE), "install", f"PREFIX={prefix}"]
-        )
-        self.assertEqual(
-            {path.name for path in (prefix / "bin").iterdir()},
-            {
-                "claude-tmux-resurrect-hook",
-                "claude-tmux-resurrect-save",
-                "claude-tmux-resurrect-pre-restore",
-                "claude-tmux-resurrect-post-restore",
-                "claude-tmux-resurrect-arm",
-                "claude-tmux-resurrect-setup",
-            },
-        )
-        self.assertTrue((prefix / "share/claude-tmux-resurrect/lib.sh").is_file())
-        self.assertFalse((prefix / "lib.sh").exists())
-        installed = prefix / "bin/claude-tmux-resurrect-hook"
-        self.run_command(
-            [BASH, str(installed)],
-            data=json.dumps({"hook_event_name": "SessionStart", "session_id": ID}),
-        )
-        self.assertEqual(self.option("@claude_session_id"), ID)
-        self.assertNotIn("/nix/store", installed.read_text())
-        self.run_command(["make", "uninstall", f"PREFIX={prefix}"])
+    @unittest.skipUnless(TPM and RESURRECT, "TPM_SOURCE and RESURRECT_SOURCE are set")
+    @unittest.skipIf(PLUGIN_ROOT != ROOT, "TPM installs from a Git repository")
+    @unittest.skipIf(system_plugins(), "TPM also reads @plugin lines in /etc/tmux.conf")
+    def test_tpm_installs_updates_and_cleans_the_readme_configuration(self):
+        plugins = self.home / ".tmux/plugins"
+        for name, source in [("tpm", TPM), ("tmux-resurrect", RESURRECT)]:
+            copied = plugins / name
+            shutil.copytree(source, copied, symlinks=True)
+            # Sources from the Nix store are read-only.
+            for path in [copied, *copied.rglob("*")]:
+                if not path.is_symlink():
+                    path.chmod(path.stat().st_mode | 0o200)
+            # TPM treats any Git repository in its directory as installed.
+            self.git(copied, "init", "-q")
+        # A local repository stands in for the GitHub repository.
+        upstream = self.base / "upstream/claude-tmux-resurrect"
+        self.copy_plugin(upstream)
+        self.git(upstream, "init", "-q")
+        self.git(upstream, "add", "-A")
+        self.git(upstream, "commit", "-q", "-m", "Release")
+        readme = (ROOT / "README.md").read_text()
+        configuration = readme.split("```tmux\n", 1)[1].split("```", 1)[0]
+        line = "set -g @plugin 'kallisti-dev/claude-tmux-resurrect'\n"
+        self.assertIn(line, configuration)
+        # TPM reads plugin names from the user's configuration file.
+        config = self.home / ".tmux.conf"
+        config.write_text(configuration.replace(line, f"set -g @plugin '{upstream}'\n"))
+        self.tmux("source-file", str(config))
+        self.run_with_git(plugins / "tpm/bin/install_plugins")
+        self.tmux("source-file", str(config))
+        installed = plugins / "claude-tmux-resurrect"
+        self.assertEqual(self.plugin_dirs(), str(installed))
+        save = self.global_option("@resurrect-hook-post-save-layout")
+        self.assertIn(str(installed / "bin/claude-tmux-resurrect-save"), save)
+
+        (upstream / "UPDATED").touch()
+        self.git(upstream, "add", "UPDATED")
+        self.git(upstream, "commit", "-q", "-m", "Update")
+        self.run_with_git(plugins / "tpm/bin/update_plugins", "claude-tmux-resurrect")
+        self.assertTrue((installed / "UPDATED").is_file())
+        self.tmux("source-file", str(config))
+        self.assertEqual(self.plugin_dirs(), str(installed))
+        self.assertEqual(self.global_option("@resurrect-hook-post-save-layout"), save)
+
+        config.write_text(configuration.replace(line, ""))
+        self.run_with_git(plugins / "tpm/bin/clean_plugins")
         self.assertFalse(installed.exists())
+        self.tmux("source-file", str(config))
+        self.write_snapshot()
+        original = self.snapshot.read_bytes()
+        self.execute_resurrect_hook("post-save-layout", self.snapshot)
+        self.assertEqual(self.snapshot.read_bytes(), original)
 
     @unittest.skipUnless(
         RESURRECT, "RESURRECT_SOURCE is supplied by nix develop / flake checks"
@@ -987,7 +1099,7 @@ class Integration(unittest.TestCase):
     def test_real_resurrect_save_restore_and_snapshot_deduplication(self):
         self.transcript()
         self.hook("SessionStart")
-        self.load_hooks()
+        self.load_plugin()
         self.tmux("set", "-g", "@resurrect-processes", ":all:")
         self.run_command([BASH, str(Path(RESURRECT) / "scripts/save.sh"), "quiet"])
         last = self.snapdir / "last"
@@ -1025,7 +1137,7 @@ class Integration(unittest.TestCase):
         ).stdout.strip()
         self.transcript(session_id="later-id")
         self.hook("SessionStart", "later-id", env=dict(self.env, TMUX_PANE=later_pane))
-        self.load_hooks()
+        self.load_plugin()
         self.attach()
         self.run_command([BASH, str(Path(RESURRECT) / "scripts/save.sh"), "quiet"])
         self.assertEqual(len(self.records(self.snapdir / "last")), 2)

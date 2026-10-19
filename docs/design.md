@@ -4,6 +4,23 @@ This integration adds exact Claude conversation resumption to tmux-resurrect.
 Resurrect handles the layout; these scripts associate each Claude pane with its
 session ID and prepare the command needed to resume it.
 
+## Plugin loading
+
+The repository is both a tmux plugin and a Claude Code plugin. tmux runs
+`claude-tmux-resurrect.tmux`, through TPM or `run-shell`, which runs setup. Setup
+registers the resurrect and tmux callbacks and adds the plugin directory to
+`CLAUDE_CODE_PLUGIN_DIRS` in tmux's global environment. Claude Code loads each
+directory listed in that variable in place, as a session-only plugin, so Claude
+sessions started in new panes run `hooks/hooks.json` from the same directory as
+the tmux callbacks. The two halves therefore always come from the same files,
+and the pane options under [transient tmux state](#transient-tmux-state) are
+their only interface.
+
+Setup records the directory it listed and replaces that entry when the plugin
+moves, keeping entries that something else added. A process keeps the
+environment it started with, so Claude sessions in panes opened before the
+plugin loaded do not load its hooks.
+
 ## Save and restore
 
 Claude's SessionStart hook records the exact session ID on its tmux pane.
@@ -58,13 +75,15 @@ current value is still the one setup installed.
 
 | Component | Responsibility |
 | --- | --- |
-| `claude-tmux-resurrect-setup [--remove]` | Register or remove hooks while preserving other integrations |
+| `claude-tmux-resurrect.tmux` | Entry point for TPM or `run-shell`: run setup and display its failures |
+| `.claude-plugin/plugin.json`, `hooks/hooks.json` | Claude Code plugin manifest and session hook configuration |
+| `claude-tmux-resurrect-setup [--remove]` | Register or remove hooks and the `CLAUDE_CODE_PLUGIN_DIRS` entry while preserving other integrations |
 | `claude-tmux-resurrect-hook` | Record `@claude_session_id` on SessionStart; clear a matching ID on SessionEnd |
 | `claude-tmux-resurrect-save SNAPSHOT` | Resolve cwd/worktree, embed mappings, blank generic saved Claude commands |
 | `claude-tmux-resurrect-pre-restore` | Suppress launches during resurrect's layout restoration |
 | `claude-tmux-resurrect-post-restore [SNAPSHOT]` | Queue exact resume commands, clear the restore gate, and launch sessions that have attached clients |
 | `claude-tmux-resurrect-arm '$N'` | Dispatch pending commands once for the attached tmux session ID |
-| `share/claude-tmux-resurrect/lib.sh` | Share transcript lookup, metadata validation, command quoting, and snapshot path resolution |
+| `lib/claude-tmux-resurrect.sh` | Share transcript lookup, metadata validation, command quoting, and snapshot path resolution |
 
 ## Local data
 
@@ -99,9 +118,10 @@ Pending commands and metadata are removed after dispatch. The saved metadata is
 also retained when saving a conversation that is still waiting for attachment.
 
 Setup keeps previous and managed hook values, array slots, and expected handler
-text in global `@claude-tmux-resurrect-*` options. These describe the running
-server's registrations. Removing a callback from the configuration file alone
-does not clear a value setup previously captured; see
+text in global `@claude-tmux-resurrect-*` options, and the directory it listed in
+`CLAUDE_CODE_PLUGIN_DIRS` in `@claude-tmux-resurrect-dir`. These describe the
+running server's registrations. Removing a callback from the configuration file
+alone does not clear a value setup previously captured; see
 [replacing shared hooks](troubleshooting.md#replacing-or-removing-a-shared-hook).
 
 See the [README](../README.md) for setup and usage.

@@ -1,19 +1,49 @@
 #!/usr/bin/env bash
-# Register this integration alongside existing tmux and resurrect hooks.
+# Register this integration alongside existing tmux and resurrect hooks, and
+# list the plugin in CLAUDE_CODE_PLUGIN_DIRS for Claude sessions in new panes.
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
-# shellcheck source=share/claude-tmux-resurrect/lib.sh
-source "${BASH_SOURCE[0]%/*}/../share/claude-tmux-resurrect/lib.sh"
+# shellcheck source=lib/claude-tmux-resurrect.sh
+source "${BASH_SOURCE[0]%/*}/../lib/claude-tmux-resurrect.sh"
 require_tmux
 [[ $# == 0 || ($# == 1 && ${1:-} == --remove) ]] || die 'usage: claude-tmux-resurrect-setup [--remove]'
 bin_dir=$(cd -- "${BASH_SOURCE[0]%/*}" && pwd)
+plugin_dir=${bin_dir%/bin}
 prefix=@claude-tmux-resurrect
+variable=CLAUDE_CODE_PLUGIN_DIRS
 
 # Serialize reloads without clearing or rebuilding another plugin's hook array.
 tmux wait-for -L claude-tmux-resurrect-setup
 trap 'tmux wait-for -U claude-tmux-resurrect-setup' EXIT
 
 option() { tmux show-options -gqv "$1"; }
+
+# Print tmux's global value of CLAUDE_CODE_PLUGIN_DIRS, if it has one.
+plugin_dirs() {
+  local line
+  if line=$(tmux show-environment -g "$variable" 2>/dev/null) && [[ $line == "$variable="* ]]; then
+    printf '%s' "${line#"$variable="}"
+  fi
+}
+
+# Usage: update_plugin_dirs REMOVE [ADD]
+# Rewrite tmux's global CLAUDE_CODE_PLUGIN_DIRS without the directory REMOVE,
+# appending ADD if given. Other directories keep their order. New panes
+# inherit the result; running processes keep the value they started with.
+update_plugin_dirs() {
+  local remove=$1 add=${2:-} entry value='' entries=()
+  IFS=: read -ra entries <<<"$(plugin_dirs)"
+  for entry in ${entries[@]+"${entries[@]}"}; do
+    [[ -n $entry && $entry != "$remove" && $entry != "$add" ]] || continue
+    value+=${value:+:}$entry
+  done
+  [[ -z $add ]] || value+=${value:+:}$add
+  if [[ -n $value ]]; then
+    tmux set-environment -g "$variable" "$value"
+  else
+    tmux set-environment -gu "$variable"
+  fi
+}
 
 # Usage: guarded QUOTED_PATH
 # Print a shell command that runs QUOTED_PATH, a path already quoted for the
@@ -123,7 +153,11 @@ if [[ ${1:-} == --remove ]]; then
   for event in client-attached client-session-changed; do
     remove_event_hook "$event"
   done
+  listed=$(option "$prefix-dir")
+  [[ -z $listed ]] || update_plugin_dirs "$listed"
+  tmux set-option -gu "$prefix-dir"
 else
+  [[ $plugin_dir != *:* ]] || die "$variable cannot list a directory whose path contains ':': $plugin_dir"
   register_resurrect_hook post-save-layout claude-tmux-resurrect-save
   register_resurrect_hook pre-restore-all claude-tmux-resurrect-pre-restore
   register_resurrect_hook post-restore-all claude-tmux-resurrect-post-restore
@@ -133,4 +167,8 @@ else
   for event in client-attached client-session-changed; do
     register_event_hook "$event" "$handler"
   done
+  # Claude Code loads each listed directory in place as a session-only
+  # plugin, which runs this plugin's hooks/hooks.json.
+  update_plugin_dirs "$(option "$prefix-dir")" "$plugin_dir"
+  tmux set-option -g "$prefix-dir" "$plugin_dir"
 fi
