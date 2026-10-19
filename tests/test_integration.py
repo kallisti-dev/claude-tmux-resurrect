@@ -22,6 +22,7 @@ PYTHON = shutil.which("python3")
 GIT = shutil.which("git")
 RESURRECT = os.environ.get("RESURRECT_SOURCE")
 TPM = os.environ.get("TPM_SOURCE")
+CLAUDE = os.environ.get("CLAUDE_BINARY")
 ID = "11111111-2222-3333-4444-555555555555"
 
 
@@ -1039,6 +1040,35 @@ class Integration(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("required command not found on PATH: jq", result.stderr)
+
+    @unittest.skipUnless(CLAUDE, "CLAUDE_BINARY is supplied by the claude flake check")
+    def test_real_claude_records_and_clears_its_session_on_a_new_pane(self):
+        self.load_plugin()
+        # Requests go to a closed local port, so nothing leaves the machine;
+        # session hooks run before the first request fails.
+        for name, value in {
+            "CLAUDE_CONFIG_DIR": str(self.home / "claude config"),
+            "ANTHROPIC_API_KEY": "sk-ant-test-not-a-key",
+            "ANTHROPIC_BASE_URL": "http://127.0.0.1:9",
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        }.items():
+            self.tmux("set-environment", "-g", name, value)
+        command = f"{shlex.quote(CLAUDE)} -p hello; sleep 60"
+        self.tmux("new-window", "-d", "-n", "claude", command)
+        pane = self.tmux("display", "-p", "-t", "work:claude", "#{pane_id}")
+        pane = pane.stdout.strip()
+
+        def recorded():
+            result = self.tmux(
+                "show", "-pqv", "-t", pane, "@claude_session_id", check=False
+            )
+            return result.stdout.strip()
+
+        session_id = wait_until(recorded, "Claude did not record its session", 30)
+        self.assertRegex(session_id, r"^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
+        # Interrupting Claude ends its session while the pane stays open.
+        self.tmux("send-keys", "-t", pane, "C-c")
+        wait_until(lambda: not recorded(), "Claude did not clear its session", 30)
 
     @unittest.skipUnless(TPM and RESURRECT, "TPM_SOURCE and RESURRECT_SOURCE are set")
     @unittest.skipIf(PLUGIN_ROOT != ROOT, "TPM installs from a Git repository")

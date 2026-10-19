@@ -56,6 +56,14 @@
             ruff
           ];
           package = pkgs.callPackage ./package.nix { };
+          pluginRoot = "${package}/share/tmux-plugins/claude-tmux-resurrect";
+          inherit
+            (import nixpkgs {
+              inherit system;
+              config.allowUnfreePredicate = pkg: nixpkgs.lib.getName pkg == "claude-code";
+            })
+            claude-code
+            ;
           scripts = "claude-tmux-resurrect.tmux bin/* lib/*.sh";
           check =
             name: deps: command:
@@ -91,9 +99,24 @@
             '';
             behavior = check "behavior" (runtime ++ testTools) behavior;
             packaging = check "packaging" (runtime ++ testTools) ''
-              export PLUGIN_ROOT=${package}/share/tmux-plugins/claude-tmux-resurrect
+              export PLUGIN_ROOT=${pluginRoot}
               ${behavior}
             '';
+            # Claude Code fails to format numbers inside the Darwin sandbox,
+            # which nixpkgs also disables to build it there.
+            claude =
+              (check "claude" (runtime ++ testTools ++ [ claude-code ]) ''
+                export HOME="$TMPDIR/home" CLAUDE_CONFIG_DIR="$TMPDIR/claude"
+                export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+                mkdir -p "$HOME"
+                claude plugin validate --strict .
+                claude plugin validate --strict ${pluginRoot}
+                patchShebangs --build claude-tmux-resurrect.tmux bin
+                export CLAUDE_BINARY=${pkgs.lib.getExe claude-code}
+                python3 -m unittest discover -s tests -v -f -k test_real_claude
+                PLUGIN_ROOT=${pluginRoot} python3 -m unittest discover -s tests -v -f -k test_real_claude
+              '').overrideAttrs
+                { __noChroot = pkgs.stdenv.hostPlatform.isDarwin; };
             nonflake =
               let
                 pinnedPackage = import ./default.nix { inherit system; };

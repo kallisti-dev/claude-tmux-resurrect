@@ -21,9 +21,12 @@ Code uses.
 
 ## Testing limits
 
-Tests stub Claude. They verify exact argv, cwd, hook behavior, tmux lifecycle,
-and upstream resurrect interoperability. They do not test Claude authentication,
-transcript compatibility across versions, or an actual conversation resumption.
+Most tests stub Claude. They verify exact argv, cwd, hook behavior, tmux
+lifecycle, and interoperability with upstream resurrect and TPM. One test runs
+the Claude Code binary from the pinned nixpkgs, without network access, to check
+that a session started in a new pane loads the plugin and records and clears its
+session ID. The tests do not cover Claude authentication, transcript
+compatibility across versions, or an actual conversation resumption.
 
 The transcript directory layout and top-level `cwd` fields are an integration
 assumption and can change with Claude versions. Worktree inference covers the
