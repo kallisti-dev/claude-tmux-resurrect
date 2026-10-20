@@ -110,11 +110,53 @@ at_least() {
 # Print PANE's own value of OPTION, or nothing if it is unset.
 pane_option() { tmux show-options -pqv -t "$1" "$2"; }
 
+# The agents whose sessions are restored, as named in pane options and
+# snapshot records.
+agents='claude'
+
+# Usage: agent_label AGENT
+# Print AGENT's name for messages.
+agent_label() {
+  case $1 in
+    claude) printf 'Claude' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# Usage: agent_of_command COMMAND
+# Print the agent that a pane's #{pane_current_command} shows is running, or
+# nothing. Nix wrappers run a binary named .NAME-wrapped.
+agent_of_command() {
+  local agent
+  for agent in $agents; do
+    if [[ $1 =~ (^|/)\.?$agent($|[-.\ ]) ]]; then
+      printf '%s' "$agent"
+      return
+    fi
+  done
+}
+
 # Usage: valid_id ID
-# Succeed if ID has the form of a Claude session ID: 1 to 128 letters, digits,
+# Succeed if ID has the form of an agent session ID: 1 to 128 letters, digits,
 # underscores, or hyphens, starting with a letter or digit. valid_record and
-# tmux-agent-resurrect-hook repeat this pattern in jq.
+# tmux-agent-resurrect-claude-hook repeat this pattern in jq.
 valid_id() { [[ $1 =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$ ]]; }
+
+# Usage: record_session PANE AGENT ID
+# Record that PANE runs AGENT's session ID, replacing any pending resume.
+record_session() {
+  tmux set-option -p -t "$1" @agent-resurrect-session "$2 $3"
+  tmux set-option -pu -t "$1" @agent-resurrect-resume-cmd
+  tmux set-option -pu -t "$1" @agent-resurrect-resume-data
+}
+
+# Usage: end_session PANE AGENT ID
+# Clear PANE's recorded session if it is still AGENT's ID. tmux compares and
+# clears in one command, so a newer session that has started meanwhile stays.
+end_session() {
+  tmux if-shell -F -t "$1" "#{==:#{@agent-resurrect-session},$2 $3}" \
+    "set-option -pu -t $1 @agent-resurrect-session"
+}
 
 # Usage: quote STRING
 # Print STRING as one single-quoted shell word, writing each ' as '\''. Bash
@@ -156,17 +198,19 @@ find_transcript() {
 # shell variables. Control characters are incompatible with tmux-resurrect's
 # line/tab-oriented snapshot format.
 valid_record() {
-  jq -se '
+  jq -se --arg agents "$agents" '
     def text: type == "string" and length > 0 and
       (test("[\u0000-\u001f\u007f]") | not);
     length == 1 and (.[0] |
     type == "object" and .version == 1 and
+    (.agent | IN($agents | split(" ")[])) and
     (.session | text) and (.session | test("[:.]") | not) and
     (.window | type == "string" and test("^[0-9]+\\z")) and
     (.pane | type == "string" and test("^[0-9]+\\z")) and
     (.session_id | type == "string" and test("^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}\\z")) and
     (.cwd | text and startswith("/")) and
-    (.worktree | type == "string" and (test("[\u0000-\u001f\u007f/]") | not)))
+    (.worktree | type == "string" and (test("[\u0000-\u001f\u007f/]") | not)) and
+    (.agent == "claude" or .worktree == ""))
   ' >/dev/null 2>&1 <<<"$1"
 }
 
@@ -193,17 +237,28 @@ worktree_name() {
 
 # Usage: resume_command RECORD
 # Print the command line that resumes RECORD's conversation from a pane's
-# shell: cd to the saved directory and run claude --resume SESSION_ID, or, for
-# a named worktree, cd to the main repository and add --worktree NAME. Warn and
-# fail without output if the record is invalid or inconsistent, its transcript
-# is missing, ambiguous, or empty, or a directory no longer exists.
-# Deliberately no picker fallback: restoration must identify one exact session.
+# shell. Warn and fail without output if the record is invalid or
+# inconsistent, or its directory no longer exists. Deliberately no picker
+# fallback: restoration must identify one exact session.
 resume_command() {
-  local record=$1 dir id worktree transcript root
+  local record=$1 agent
   valid_record "$record" || {
     warn 'invalid session metadata; skipping'
     return 1
   }
+  agent=$(jq -r '.agent' <<<"$record")
+  case $agent in
+    claude) claude_resume_command "$record" ;;
+  esac
+}
+
+# Usage: claude_resume_command RECORD
+# For a valid Claude record: cd to the saved directory and run
+# claude --resume SESSION_ID, or, for a named worktree, cd to the main
+# repository and add --worktree NAME. Fail if its transcript is missing,
+# ambiguous, or empty, or a directory no longer exists.
+claude_resume_command() {
+  local record=$1 dir id worktree transcript root
   dir=$(jq -r '.cwd' <<<"$record")
   id=$(jq -r '.session_id' <<<"$record")
   worktree=$(jq -r '.worktree' <<<"$record")

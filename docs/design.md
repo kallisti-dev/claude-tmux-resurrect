@@ -105,8 +105,8 @@ current value is still the one setup installed.
 | `tmux-agent-resurrect.tmux` | Entry point for TPM or `run-shell`: run setup and display its failures |
 | `.claude-plugin/plugin.json`, `hooks/hooks.json` | Claude Code plugin manifest and session hook configuration |
 | `tmux-agent-resurrect-setup [--remove]` | Register or remove hooks and the `CLAUDE_CODE_PLUGIN_DIRS` entry while preserving other integrations |
-| `tmux-agent-resurrect-hook` | Record `@agent-resurrect-session` on SessionStart; clear a matching ID on SessionEnd |
-| `tmux-agent-resurrect-save SNAPSHOT` | Resolve cwd/worktree, embed mappings, blank generic saved Claude commands |
+| `tmux-agent-resurrect-claude-hook` | Claude Code's session hook: record `@agent-resurrect-session` on SessionStart; clear a matching session on SessionEnd |
+| `tmux-agent-resurrect-save SNAPSHOT` | Resolve cwd/worktree, embed mappings, blank generic saved agent commands |
 | `tmux-agent-resurrect-pre-restore` | Suppress launches during resurrect's layout restoration |
 | `tmux-agent-resurrect-post-restore [SNAPSHOT]` | Queue exact resume commands, clear the restore gate, and launch sessions that have attached clients |
 | `tmux-agent-resurrect-arm '$N' [CLIENT]` | Dispatch pending commands once for the attached tmux session ID, and show kept notices on an attaching client |
@@ -126,8 +126,9 @@ worktree, or Claude settings file is modified. Transcript contents are never
 copied into snapshots.
 
 Each snapshot includes lines beginning `agent-resurrect`, followed by a tab and a JSON
-object containing schema version 1, tmux session name, window and pane indexes,
-Claude session ID, absolute cwd, and worktree name. This local metadata can reveal
+object containing schema version 1, the agent (`claude`), tmux session name,
+window and pane indexes, the agent's session ID, absolute cwd, and Claude
+worktree name, which is empty for other agents. This local metadata can reveal
 project names and paths. Snapshot files are replaced with mode 0600; use a private
 snapshot directory as well. Existing resurrect pane titles, commands, or optional
 pane-content captures may contain additional information independently of this
@@ -137,7 +138,7 @@ integration. There is no network service or telemetry in these scripts.
 
 | Option | Scope | Purpose |
 | --- | --- | --- |
-| `@agent-resurrect-session` | Pane | Current Claude conversation ID, maintained by Claude hooks |
+| `@agent-resurrect-session` | Pane | The agent and session ID running in the pane, such as `claude 1111…`, maintained by the agent's hooks |
 | `@agent-resurrect-resume-data` | Pane | Snapshot metadata waiting to be dispatched |
 | `@agent-resurrect-resume-cmd` | Pane | Generated resume command, available for inspection |
 | `@agent-resurrect-launched` | Pane | Command already dispatched during this pane's lifetime |

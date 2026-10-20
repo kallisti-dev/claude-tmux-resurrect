@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Save exact Claude session mappings in a tmux-resurrect snapshot.
+# Save the panes' agent sessions in a tmux-resurrect snapshot.
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
 # shellcheck source=lib/tmux-agent-resurrect.sh
@@ -9,77 +9,91 @@ need mktemp mv rm
 [[ $# == 1 && -f $1 && ! -L $1 ]] || die 'usage: tmux-agent-resurrect-save SNAPSHOT (a regular resurrect snapshot, not a symlink)'
 snapshot=$1
 umask 077
-records=$(mktemp "${snapshot}.claude-records.XXXXXX")
-output=$(mktemp "${snapshot}.claude-save.XXXXXX")
+records=$(mktemp "${snapshot}.agent-resurrect-records.XXXXXX")
+output=$(mktemp "${snapshot}.agent-resurrect-save.XXXXXX")
 trap 'rm -f -- "$records" "$output"' EXIT
 
 # Use snapshot pane identities rather than whitespace-delimited list-panes.
 # This also respects resurrect's decision to omit grouped sessions. Each line
-# starts with whether the pane's command looks like Claude.
+# holds the pane's command, after a colon that keeps an empty one a field,
+# and its identity.
 unrecorded=() targets=()
-while IFS=' ' read -r claude row; do
+while IFS=$'\t' read -r command row; do
+  command=${command#:}
   target=$(jq -r '"=" + .session + ":" + .window + "." + .pane' <<<"$row")
   pane=$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null) || continue
   [[ -n $pane ]] || continue
-  id=$(pane_option "$pane" @agent-resurrect-session)
-  if [[ -z $id ]]; then
+  session=$(pane_option "$pane" @agent-resurrect-session)
+  if [[ -z $session ]]; then
     # Save-before-attach must not discard sessions still waiting to launch.
     pending=$(pane_option "$pane" @agent-resurrect-resume-data)
+    running=$(agent_of_command "$command")
     if [[ -n $pending ]] && valid_record "$pending"; then
       jq -c --argjson row "$row" '. + $row' <<<"$pending" >>"$records"
-    elif [[ $claude == true ]]; then
+    elif [[ -n $running ]]; then
       unrecorded+=("$pane")
-      targets+=("${target#=}")
+      targets+=("$(agent_label "$running") in ${target#=}")
     fi
     continue
   fi
-  if ! valid_id "$id"; then
-    warn "invalid session ID on $pane; skipping"
+  agent=${session%% *}
+  id=${session#* }
+  if [[ " $agents " != *" $agent "* ]] || ! valid_id "$id"; then
+    warn "invalid session on $pane: $session; skipping"
     continue
   fi
   dir=$(tmux display-message -p -t "$pane" '#{pane_current_path}')
-  if transcript=$(find_transcript "$id"); then
-    # JSON decoding handles spaces, escaping and pretty/partially written lines.
-    last_cwd=$(jq -Rn '
-      reduce inputs as $line (null;
-        (try ($line | fromjson) catch null) as $entry |
-        if ($entry | type) == "object" and ($entry.cwd | type) == "string"
-          and ($entry.cwd | startswith("/")) then $entry.cwd else . end
-      ) | . // empty
-    ' "$transcript")
-    [[ -z $last_cwd ]] || dir=$(jq -r . <<<"$last_cwd")
-  else
-    warn "no unique transcript for $id; saving pane directory as fallback"
+  worktree=''
+  if [[ $agent == claude ]]; then
+    if transcript=$(find_transcript "$id"); then
+      # JSON decoding handles spaces, escaping and pretty/partially written lines.
+      last_cwd=$(jq -Rn '
+        reduce inputs as $line (null;
+          (try ($line | fromjson) catch null) as $entry |
+          if ($entry | type) == "object" and ($entry.cwd | type) == "string"
+            and ($entry.cwd | startswith("/")) then $entry.cwd else . end
+        ) | . // empty
+      ' "$transcript")
+      [[ -z $last_cwd ]] || dir=$(jq -r . <<<"$last_cwd")
+    else
+      warn "no unique transcript for $id; saving pane directory as fallback"
+    fi
+    worktree=$(worktree_name "$dir")
   fi
-  record=$(jq -c --arg cwd "$dir" --arg id "$id" --arg worktree "$(worktree_name "$dir")" \
-    '. + {version: 1, cwd: $cwd, session_id: $id, worktree: $worktree}' <<<"$row")
+  record=$(jq -c --arg agent "$agent" --arg cwd "$dir" --arg id "$id" --arg worktree "$worktree" \
+    '. + {version: 1, agent: $agent, cwd: $cwd, session_id: $id, worktree: $worktree}' <<<"$row")
   if valid_record "$record"; then
     printf '%s\n' "$record" >>"$records"
   else
     warn "unsupported metadata on $pane (control characters or invalid pane identity); skipping"
   fi
 done < <(jq -Rr 'split("\t") | select(.[0] == "pane" and length >= 11) |
-  "\(.[9] | test("(^|/)claude($|[- ])"; "i")) \({session: .[1], window: .[2], pane: .[5]} | tojson)"' "$snapshot")
+  ":\(.[9])\t\({session: .[1], window: .[2], pane: .[5]} | tojson)"' "$snapshot")
 
-# Automatic saves repeat, so warn only when the set of Claude panes without a
-# session ID changes.
+# Automatic saves repeat, so warn only when the set of agent panes without a
+# recorded session changes.
 panes=${unrecorded[*]:-}
 if [[ $panes != "$(tmux show-options -gqv @agent-resurrect-unrecorded)" ]]; then
   if [[ -n $panes ]]; then
     tmux set-option -g @agent-resurrect-unrecorded "$panes"
-    notify "no session ID recorded for Claude in $(summarize "${targets[@]}"); start Claude in a new pane so it can be resumed"
+    if [[ ${#targets[@]} == 1 ]]; then
+      fix='restart it in a new pane so it can be resumed'
+    else
+      fix='restart them in new panes so they can be resumed'
+    fi
+    notify "no session recorded for $(summarize "${targets[@]}"); $fix"
   else
     tmux set-option -gu @agent-resurrect-unrecorded
   fi
 fi
 
 # Field 11 must be exactly ":" to suppress resurrect's generic process restart.
-# Hook-marked panes may appear as node or a shell, so include mapped identities.
-jq -Rr --slurpfile records "$records" '
+# A recorded agent may run as node or under a shell, so include mapped panes.
+jq -Rr --slurpfile records "$records" --arg agents "(^|/)\\.?(${agents// /|})(\$|[-. ])" '
   split("\t") as $f |
   if $f[0] == "agent-resurrect" then empty
   elif $f[0] == "pane" and ($f | length) >= 11 and
-    (($f[9] | test("(^|/)claude($|[- ])"; "i")) or
+    (($f[9] | test($agents; "i")) or
       any($records[]; .session == $f[1] and .window == $f[2] and .pane == $f[5]))
   then $f | .[10] = ":" | join("\t")
   else . end

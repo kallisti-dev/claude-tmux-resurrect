@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/tmux-agent-resurrect-hook"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/tmux-agent-resurrect-claude-hook"
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/tmux-agent-resurrect-hook"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/tmux-agent-resurrect-claude-hook"
           }
         ]
       }

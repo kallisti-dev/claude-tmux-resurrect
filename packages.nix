@@ -80,7 +80,7 @@ in
     pname = "tmux-agent-resurrect-claude-plugin";
     inherit version;
     src = source [
-      ./bin/tmux-agent-resurrect-hook
+      ./bin/tmux-agent-resurrect-claude-hook
       ./hooks
       ./skills
     ];

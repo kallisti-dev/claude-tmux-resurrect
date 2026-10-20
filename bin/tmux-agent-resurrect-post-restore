@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepare Claude resume commands after tmux layout restoration.
+# Prepare agent resume commands after tmux layout restoration.
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
 # shellcheck source=lib/tmux-agent-resurrect.sh
@@ -43,6 +43,7 @@ while IFS= read -r line; do
   [[ -z $(pane_option "$pane" @agent-resurrect-session) && -z $(pane_option "$pane" @agent-resurrect-launched) ]] || continue
   if ! cmd=$(resume_command "$record" 2>>"$reasons"); then
     skipped=$((skipped + 1))
+    [[ -n ${label:-} ]] || label=$(agent_label "$(jq -r '.agent' <<<"$record")")
     # Remove a previous pending command if its metadata has become stale.
     tmux set-option -pu -t "$pane" @agent-resurrect-resume-cmd
     tmux set-option -pu -t "$pane" @agent-resurrect-resume-data
@@ -62,14 +63,14 @@ if [[ $skipped != 0 ]]; then
   reason=${reason#tmux-agent-resurrect: }
   reason=${reason%; skipping}
   if [[ $skipped == 1 ]]; then
-    notify "couldn't resume a saved Claude session: $reason"
+    notify "couldn't resume a saved ${label:-agent} session: $reason"
   else
-    notify "couldn't resume $skipped saved Claude sessions; the first: $reason"
+    notify "couldn't resume $skipped saved agent sessions; the first: $reason"
   fi
 fi
 
 # display-message has a default session even without a client; use attachment
-# counts so a truly detached cold restore launches no Claude processes.
+# counts so a truly detached cold restore launches no agent processes.
 while IFS= read -r session; do
   "${BASH_SOURCE[0]%/*}/tmux-agent-resurrect-arm" "$session"
 done < <(tmux list-sessions -F '#{?session_attached,#{session_id},}')

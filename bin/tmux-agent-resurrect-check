@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Report whether this tmux server and shell can save and resume Claude sessions.
+# Report whether this tmux server and shell can save and resume agent sessions.
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
 # shellcheck source=lib/tmux-agent-resurrect.sh
@@ -118,21 +118,22 @@ fi
 
 unrecorded=()
 while IFS=$'\t' read -r pane where command; do
-  [[ $command =~ (^|/)[Cc]laude($|[-\ ]) ]] || continue
-  [[ -z $(pane_option "$pane" @agent-resurrect-session) ]] || continue
-  unrecorded+=("$where")
+  running=$(agent_of_command "$command")
+  [[ -n $running && -z $(pane_option "$pane" @agent-resurrect-session) ]] || continue
+  unrecorded+=("$(agent_label "$running") in $where")
 done < <(tmux list-panes -a -F $'#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}')
 if [[ ${#unrecorded[@]} == 0 ]]; then
-  ok 'every pane running Claude has a recorded session ID'
+  ok 'every pane running an agent has a recorded session'
 else
-  problem "no session ID recorded for Claude in $(summarize "${unrecorded[@]}")"
+  problem "no session recorded for $(summarize "${unrecorded[@]}")"
 fi
 
 if [[ -n $session && -n ${TMUX_PANE:-} ]]; then
   recorded=$(pane_option "$TMUX_PANE" @agent-resurrect-session)
-  if [[ $recorded == "$session" ]]; then
+  if [[ ${recorded#* } == "$session" ]]; then
     ok "this pane records session $session"
   else
+    [[ -z $recorded ]] || recorded="$(agent_label "${recorded%% *}") session ${recorded#* }"
     problem "this pane records ${recorded:-no session}, not this session ($session)"
   fi
 fi

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Resume pending Claude conversations when their tmux session is attached.
+# Resume pending agent sessions when their tmux session is attached.
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
 # shellcheck source=lib/tmux-agent-resurrect.sh
@@ -14,7 +14,6 @@ session=$1
 [[ $(tmux show-options -gqv @agent-resurrect-restoring) != 1 ]] || exit 0
 [[ $(tmux show-options -qv -t "$session" @agent-resurrect-pending 2>/dev/null) == 1 ]] || exit 0
 [[ $(tmux display-message -p -t "$session" '#{session_attached}') != 0 ]] || exit 0
-need claude
 
 # Two clients may attach simultaneously. Serialize the read/send/clear sequence.
 lock=tmux-agent-resurrect-arm-${session#\$}
@@ -30,25 +29,34 @@ while IFS= read -r pane; do
     tmux set-option -pu -t "$pane" @agent-resurrect-resume-data
     continue
   fi
+  agent=$(jq -r '.agent' <<<"$record" 2>/dev/null) || agent=''
+  label=$(agent_label "${agent:-agent}")
   # Do not type into an editor, copy mode, or another foreground application.
   command=$(tmux display-message -p -t "$pane" '#{pane_current_command}')
   where=$(tmux display-message -p -t "$pane" '#{session_name}:#{window_index}.#{pane_index}')
   case "$command" in
     bash | zsh | sh | dash | ksh) ;;
     *)
-      notify "Claude in $where resumes on a later attach, once its pane is at a shell prompt"
+      notify "$label in $where resumes on a later attach, once its pane is at a shell prompt"
       remaining=1
       continue
       ;;
   esac
   if [[ $(tmux display-message -p -t "$pane" '#{pane_in_mode}') != 0 ]]; then
-    notify "Claude in $where resumes on a later attach, once its pane leaves copy mode"
+    notify "$label in $where resumes on a later attach, once its pane leaves copy mode"
     remaining=1
     continue
   fi
   if ! cmd=$(resume_command "$record"); then
     tmux set-option -pu -t "$pane" @agent-resurrect-resume-cmd
     tmux set-option -pu -t "$pane" @agent-resurrect-resume-data
+    continue
+  fi
+  # The tmux server's PATH stands in for that of the shell that runs the
+  # command; the session stays pending until it finds the agent.
+  if ! command -v "$agent" >/dev/null 2>&1; then
+    notify "required command not found on PATH: $agent; $label in $where stays pending"
+    remaining=1
     continue
   fi
   # Literal mode prevents tmux interpreting command text as key names.

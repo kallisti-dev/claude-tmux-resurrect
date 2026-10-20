@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pause Claude launches before tmux-resurrect restores its layout.
+# Pause agent launches before tmux-resurrect restores its layout.
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
 # shellcheck source=lib/tmux-agent-resurrect.sh

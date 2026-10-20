@@ -154,7 +154,9 @@ class Integration(unittest.TestCase):
 
     def script(self, name, *args, data=None, env=None, check=True):
         # Claude runs the hook from the Claude plugin; tmux runs the rest.
-        bin = CLAUDE_PLUGIN / "bin" if name == "tmux-agent-resurrect-hook" else BIN
+        bin = (
+            CLAUDE_PLUGIN / "bin" if name == "tmux-agent-resurrect-claude-hook" else BIN
+        )
         return self.run_command(
             [str(bin / name), *map(str, args)], data=data, env=env, check=check
         )
@@ -186,7 +188,7 @@ class Integration(unittest.TestCase):
 
     def hook(self, event, session_id=ID, **kwargs):
         return self.script(
-            "tmux-agent-resurrect-hook",
+            "tmux-agent-resurrect-claude-hook",
             data=json.dumps({"hook_event_name": event, "session_id": session_id}),
             **kwargs,
         )
@@ -705,7 +707,7 @@ class Integration(unittest.TestCase):
         shown = self.load_with_client()
         self.write_snapshot()
         self.script("tmux-agent-resurrect-save", self.snapshot)
-        [message] = self.expect_message("no session ID recorded for Claude")
+        [message] = self.expect_message("no session recorded for Claude")
         self.assertIn("in work:0.0;", message)
         self.write_snapshot()
         self.script("tmux-agent-resurrect-save", self.snapshot)
@@ -748,7 +750,7 @@ class Integration(unittest.TestCase):
 
         def start(name, **env):
             self.run_command(
-                [str(copies[name] / "bin/tmux-agent-resurrect-hook")],
+                [str(copies[name] / "bin/tmux-agent-resurrect-claude-hook")],
                 data=payload,
                 env=dict(self.env, **env),
             )
@@ -764,7 +766,7 @@ class Integration(unittest.TestCase):
         start("installed")
         [message] = self.expect_message("loaded plugin version 0.0.2")
         self.assertIn("install the same version of both plugins", message)
-        self.assertEqual(self.option("@agent-resurrect-session"), ID)
+        self.assertEqual(self.option("@agent-resurrect-session"), f"claude {ID}")
 
     def fake_claude(self, version="2.1.300", plugins=None):
         # Answers the two commands the check runs. Without PLUGINS, it loads
@@ -869,13 +871,16 @@ class Integration(unittest.TestCase):
         result = self.check(env, "--session", ID)
         self.assertIn(f"ok       this pane records session {ID}", result.stdout)
         result = self.check(env, "--session", "other-session")
-        self.assertIn(f"records {ID}, not this session (other-session)", result.stdout)
+        self.assertIn(
+            f"records Claude session {ID}, not this session (other-session)",
+            result.stdout,
+        )
 
     def test_hook_start_end_and_out_of_order_end(self):
         self.hook("SessionStart")
-        self.assertEqual(self.option("@agent-resurrect-session"), ID)
+        self.assertEqual(self.option("@agent-resurrect-session"), f"claude {ID}")
         self.hook("SessionEnd", "newer-session")
-        self.assertEqual(self.option("@agent-resurrect-session"), ID)
+        self.assertEqual(self.option("@agent-resurrect-session"), f"claude {ID}")
         self.hook("SessionEnd")
         self.assertEqual(self.option("@agent-resurrect-session"), "")
 
@@ -885,7 +890,7 @@ class Integration(unittest.TestCase):
         # and package checks can interpose the proxy.
         copied = self.base / "hook-under-test"
         self.copy_plugin(copied)
-        hook = copied / "bin/tmux-agent-resurrect-hook"
+        hook = copied / "bin/tmux-agent-resurrect-claude-hook"
         marker = self.base / "interleaved-start"
         proxy = self.stubdir / "tmux"
         # Start the new conversation after the old End's first tmux request
@@ -910,7 +915,9 @@ class Integration(unittest.TestCase):
             data=json.dumps({"hook_event_name": "SessionEnd", "session_id": ID}),
         )
         self.assertTrue(marker.is_file(), "tmux proxy was not exercised")
-        self.assertEqual(self.option("@agent-resurrect-session"), "newer-session")
+        self.assertEqual(
+            self.option("@agent-resurrect-session"), "claude newer-session"
+        )
 
     def test_hook_malformed_payloads_do_not_mutate(self):
         self.hook("SessionStart")
@@ -931,15 +938,17 @@ class Integration(unittest.TestCase):
         ]:
             with self.subTest(payload=payload):
                 result = self.script(
-                    "tmux-agent-resurrect-hook", data=payload, check=False
+                    "tmux-agent-resurrect-claude-hook", data=payload, check=False
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("tmux-agent-resurrect:", result.stderr)
-                self.assertEqual(self.option("@agent-resurrect-session"), ID)
+                self.assertEqual(
+                    self.option("@agent-resurrect-session"), f"claude {ID}"
+                )
 
     def test_hook_outside_tmux_is_noop(self):
         env = {k: v for k, v in self.env.items() if k not in {"TMUX", "TMUX_PANE"}}
-        self.script("tmux-agent-resurrect-hook", data="not json", env=env)
+        self.script("tmux-agent-resurrect-claude-hook", data="not json", env=env)
 
     def test_save_changed_cwd_suppresses_generic_restart(self):
         changed = self.home / "changed directory"
@@ -1267,7 +1276,7 @@ class Integration(unittest.TestCase):
             env=dict(self.env, PATH=str(sparse)),
             check=False,
         )
-        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("required command not found on PATH: claude", result.stderr)
         self.assertNotEqual(self.option("@agent-resurrect-resume-data"), "")
         self.script("tmux-agent-resurrect-arm", self.session)
@@ -1279,7 +1288,7 @@ class Integration(unittest.TestCase):
         sparse.mkdir()
         (sparse / "tmux").symlink_to(TMUX)
         result = self.run_command(
-            [BASH, str(ROOT / "bin/tmux-agent-resurrect-hook")],
+            [BASH, str(ROOT / "bin/tmux-agent-resurrect-claude-hook")],
             data="{}",
             env=dict(self.env, PATH=str(sparse)),
             check=False,
@@ -1318,8 +1327,8 @@ class Integration(unittest.TestCase):
             )
             return result.stdout.strip()
 
-        session_id = wait_until(recorded, "Claude did not record its session", 30)
-        self.assertRegex(session_id, r"^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
+        session = wait_until(recorded, "Claude did not record its session", 30)
+        self.assertRegex(session, r"^claude [0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
         self.tmux("set", "-g", "@resurrect-save-script-path", "/resurrect/save.sh")
         result = self.script(
             "tmux-agent-resurrect-check",
@@ -1331,7 +1340,7 @@ class Integration(unittest.TestCase):
             ),
         )
         self.assertIn(
-            "ok       every pane running Claude has a recorded", result.stdout
+            "ok       every pane running an agent has a recorded session", result.stdout
         )
         self.assertTrue(result.stdout.endswith("No problems found.\n"))
         # Interrupting Claude ends its session while the pane stays open.
