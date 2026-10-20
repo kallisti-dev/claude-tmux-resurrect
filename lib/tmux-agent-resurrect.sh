@@ -7,7 +7,7 @@ plugin_bin=$(cd -- "${BASH_SOURCE[0]%/*}/../bin" && pwd)
 
 # Usage: warn MESSAGE...
 # Print MESSAGE on stderr, prefixed with the project name.
-warn() { printf 'claude-tmux-resurrect: %s\n' "$*" >&2; }
+warn() { printf 'tmux-agent-resurrect: %s\n' "$*" >&2; }
 
 # Usage: notify MESSAGE...
 # Warn with MESSAGE, then show it on attached tmux clients a second later:
@@ -16,7 +16,7 @@ warn() { printf 'claude-tmux-resurrect: %s\n' "$*" >&2; }
 notify() {
   local command
   warn "$*"
-  command="$(quote "$plugin_bin/claude-tmux-resurrect-notify") $(quote "$*")"
+  command="$(quote "$plugin_bin/tmux-agent-resurrect-notify") $(quote "$*")"
   # run-shell expands formats in its command.
   tmux run-shell -b -d 1 "${command//#/##}" 2>/dev/null || true
 }
@@ -25,15 +25,15 @@ notify() {
 # Show MESSAGE on every attached tmux client. With none attached, keep it for
 # the next client that attaches.
 show_notice() {
-  local message="claude-tmux-resurrect: $1" client shown=0 kept
+  local message="tmux-agent-resurrect: $1" client shown=0 kept
   while IFS= read -r client; do
     [[ -n $client ]] || continue
     # display-message expands formats in its message.
     tmux display-message -c "$client" -d 5000 "${message//#/##}" 2>/dev/null && shown=1
   done < <(tmux list-clients -F '#{client_name}' 2>/dev/null)
   if [[ $shown == 0 ]]; then
-    kept=$(tmux show-options -gqv @claude-tmux-resurrect-notices)
-    tmux set-option -g @claude-tmux-resurrect-notices "${kept:+$kept; }$1"
+    kept=$(tmux show-options -gqv @agent-resurrect-notices)
+    tmux set-option -g @agent-resurrect-notices "${kept:+$kept; }$1"
   fi
 }
 
@@ -41,10 +41,10 @@ show_notice() {
 # Show messages kept while no client was attached on CLIENT.
 show_kept_notices() {
   local kept
-  kept=$(tmux show-options -gqv @claude-tmux-resurrect-notices)
+  kept=$(tmux show-options -gqv @agent-resurrect-notices)
   [[ -n $kept ]] || return 0
-  tmux set-option -gu @claude-tmux-resurrect-notices
-  kept="claude-tmux-resurrect: $kept"
+  tmux set-option -gu @agent-resurrect-notices
+  kept="tmux-agent-resurrect: $kept"
   tmux display-message -c "$1" -d 5000 "${kept//#/##}" 2>/dev/null || true
 }
 
@@ -113,7 +113,7 @@ pane_option() { tmux show-options -pqv -t "$1" "$2"; }
 # Usage: valid_id ID
 # Succeed if ID has the form of a Claude session ID: 1 to 128 letters, digits,
 # underscores, or hyphens, starting with a letter or digit. valid_record and
-# claude-tmux-resurrect-hook repeat this pattern in jq.
+# tmux-agent-resurrect-hook repeat this pattern in jq.
 valid_id() { [[ $1 =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$ ]]; }
 
 # Usage: quote STRING

@@ -2,11 +2,11 @@
 # Save exact Claude session mappings in a tmux-resurrect snapshot.
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
-# shellcheck source=lib/claude-tmux-resurrect.sh
-source "${BASH_SOURCE[0]%/*}/../lib/claude-tmux-resurrect.sh"
+# shellcheck source=lib/tmux-agent-resurrect.sh
+source "${BASH_SOURCE[0]%/*}/../lib/tmux-agent-resurrect.sh"
 require_tmux
 need mktemp mv rm
-[[ $# == 1 && -f $1 && ! -L $1 ]] || die 'usage: claude-tmux-resurrect-save SNAPSHOT (a regular resurrect snapshot, not a symlink)'
+[[ $# == 1 && -f $1 && ! -L $1 ]] || die 'usage: tmux-agent-resurrect-save SNAPSHOT (a regular resurrect snapshot, not a symlink)'
 snapshot=$1
 umask 077
 records=$(mktemp "${snapshot}.claude-records.XXXXXX")
@@ -21,10 +21,10 @@ while IFS=' ' read -r claude row; do
   target=$(jq -r '"=" + .session + ":" + .window + "." + .pane' <<<"$row")
   pane=$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null) || continue
   [[ -n $pane ]] || continue
-  id=$(pane_option "$pane" @claude_session_id)
+  id=$(pane_option "$pane" @agent-resurrect-session)
   if [[ -z $id ]]; then
     # Save-before-attach must not discard sessions still waiting to launch.
-    pending=$(pane_option "$pane" @claude_resume_data)
+    pending=$(pane_option "$pane" @agent-resurrect-resume-data)
     if [[ -n $pending ]] && valid_record "$pending"; then
       jq -c --argjson row "$row" '. + $row' <<<"$pending" >>"$records"
     elif [[ $claude == true ]]; then
@@ -64,12 +64,12 @@ done < <(jq -Rr 'split("\t") | select(.[0] == "pane" and length >= 11) |
 # Automatic saves repeat, so warn only when the set of Claude panes without a
 # session ID changes.
 panes=${unrecorded[*]:-}
-if [[ $panes != "$(tmux show-options -gqv @claude-tmux-resurrect-unrecorded)" ]]; then
+if [[ $panes != "$(tmux show-options -gqv @agent-resurrect-unrecorded)" ]]; then
   if [[ -n $panes ]]; then
-    tmux set-option -g @claude-tmux-resurrect-unrecorded "$panes"
+    tmux set-option -g @agent-resurrect-unrecorded "$panes"
     notify "no session ID recorded for Claude in $(summarize "${targets[@]}"); start Claude in a new pane so it can be resumed"
   else
-    tmux set-option -gu @claude-tmux-resurrect-unrecorded
+    tmux set-option -gu @agent-resurrect-unrecorded
   fi
 fi
 
@@ -77,7 +77,7 @@ fi
 # Hook-marked panes may appear as node or a shell, so include mapped identities.
 jq -Rr --slurpfile records "$records" '
   split("\t") as $f |
-  if $f[0] == "claude-tmux" then empty
+  if $f[0] == "agent-resurrect" then empty
   elif $f[0] == "pane" and ($f | length) >= 11 and
     (($f[9] | test("(^|/)claude($|[- ])"; "i")) or
       any($records[]; .session == $f[1] and .window == $f[2] and .pane == $f[5]))
@@ -85,6 +85,6 @@ jq -Rr --slurpfile records "$records" '
   else . end
 ' "$snapshot" >"$output"
 while IFS= read -r record; do
-  printf 'claude-tmux\t%s\n' "$record" >>"$output"
+  printf 'agent-resurrect\t%s\n' "$record" >>"$output"
 done <"$records"
 mv -- "$output" "$snapshot"

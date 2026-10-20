@@ -3,18 +3,18 @@
 # list the plugin in CLAUDE_CODE_PLUGIN_DIRS for Claude sessions in new panes.
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
-# shellcheck source=lib/claude-tmux-resurrect.sh
-source "${BASH_SOURCE[0]%/*}/../lib/claude-tmux-resurrect.sh"
+# shellcheck source=lib/tmux-agent-resurrect.sh
+source "${BASH_SOURCE[0]%/*}/../lib/tmux-agent-resurrect.sh"
 require_tmux
-[[ $# == 0 || ($# == 1 && ${1:-} == --remove) ]] || die 'usage: claude-tmux-resurrect-setup [--remove]'
+[[ $# == 0 || ($# == 1 && ${1:-} == --remove) ]] || die 'usage: tmux-agent-resurrect-setup [--remove]'
 bin_dir=$(cd -- "${BASH_SOURCE[0]%/*}" && pwd)
 plugin_dir=${bin_dir%/bin}
-prefix=@claude-tmux-resurrect
+prefix=@agent-resurrect
 variable=CLAUDE_CODE_PLUGIN_DIRS
 
 # Serialize reloads without clearing or rebuilding another plugin's hook array.
-tmux wait-for -L claude-tmux-resurrect-setup
-trap 'tmux wait-for -U claude-tmux-resurrect-setup' EXIT
+tmux wait-for -L tmux-agent-resurrect-setup
+trap 'tmux wait-for -U tmux-agent-resurrect-setup' EXIT
 
 option() { tmux show-options -gqv "$1"; }
 
@@ -59,7 +59,7 @@ compose_hook() {
     printf '%s' "$own"
     return
   fi
-  name=__claude_tmux_resurrect_${phase//-/_}
+  name=__tmux_agent_resurrect_${phase//-/_}
   printf '%s\n' "$name() {" '  local previous_status=0 own_status=0'
   if [[ $phase == pre-restore-all ]]; then
     printf '  %s "$@" || own_status=$?\n' "$own"
@@ -87,7 +87,7 @@ register_resurrect_hook() {
     # Do not capture a wrapper around one of our generated functions and then
     # nest it again. A directly replaced hook is safe to capture on reload.
     [[ -z $managed || $current != *"$managed"* ]] || die "@resurrect-hook-$phase wraps a setup-generated hook; reset that option before running setup"
-    [[ $current != *'__claude_tmux_resurrect_'* ]] || die "@resurrect-hook-$phase wraps a setup-generated hook; reset that option before running setup"
+    [[ $current != *'__tmux_agent_resurrect_'* ]] || die "@resurrect-hook-$phase wraps a setup-generated hook; reset that option before running setup"
     previous=$current
     # Adopt our own command, set without bookkeeping, without running it twice.
     [[ $previous != "$own" ]] || previous=''
@@ -167,11 +167,11 @@ else
     [[ $plugin_dir != *:* ]] || die "$variable cannot list a directory whose path contains ':': $plugin_dir"
     listing=$plugin_dir
   fi
-  register_resurrect_hook post-save-layout claude-tmux-resurrect-save
-  register_resurrect_hook pre-restore-all claude-tmux-resurrect-pre-restore
-  register_resurrect_hook post-restore-all claude-tmux-resurrect-post-restore
+  register_resurrect_hook post-save-layout tmux-agent-resurrect-save
+  register_resurrect_hook pre-restore-all tmux-agent-resurrect-pre-restore
+  register_resurrect_hook post-restore-all tmux-agent-resurrect-post-restore
   # Escape literal # in installation paths before run-shell expands formats.
-  arm=$(guarded "$(quote "${bin_dir//#/##}/claude-tmux-resurrect-arm")")
+  arm=$(guarded "$(quote "${bin_dir//#/##}/tmux-agent-resurrect-arm")")
   # Attaching also changes the client's session, so only the attach hook
   # passes the client that shows messages kept while none was attached.
   register_event_hook client-attached "run-shell -b $(quote "$arm #{q:session_id} #{q:client_name}")"

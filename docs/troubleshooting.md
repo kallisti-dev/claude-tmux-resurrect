@@ -4,7 +4,7 @@ Run these commands inside the affected tmux server. The scripts are in the
 plugin's `bin` directory, which setup records in a tmux option:
 
 ```sh
-plugin=$(tmux show-options -gqv @claude-tmux-resurrect-dir)
+plugin=$(tmux show-options -gqv @agent-resurrect-dir)
 ```
 
 Start with the check, which reports each problem it finds with a line beginning
@@ -12,7 +12,7 @@ Start with the check, which reports each problem it finds with a line beginning
 result.
 
 ```sh
-"$plugin"/bin/claude-tmux-resurrect-check
+"$plugin"/bin/tmux-agent-resurrect-check
 ```
 
 ## No session was saved
@@ -21,7 +21,7 @@ A save reports Claude panes without a recorded session ID in tmux's message
 line. Inspect the current pane:
 
 ```sh
-tmux show-options -pqv @claude_session_id
+tmux show-options -pqv @agent-resurrect-session
 ```
 
 An empty value means Claude's session hook has not run in that pane. With TPM,
@@ -42,11 +42,11 @@ Manager. Start or resume Claude where it loads the plugin, then save again.
 Inspect the pending command and restore gate:
 
 ```sh
-tmux show-options -pqv @claude_resume_cmd
-tmux show-options -gqv @claude_restoring
+tmux show-options -pqv @agent-resurrect-resume-cmd
+tmux show-options -gqv @agent-resurrect-restoring
 ```
 
-Run `"$plugin"/bin/claude-tmux-resurrect-post-restore` inside tmux and check its
+Run `"$plugin"/bin/tmux-agent-resurrect-post-restore` inside tmux and check its
 stderr. Missing transcripts, deleted directories, ambiguous IDs, and invalid
 metadata produce diagnostics and are skipped.
 
@@ -56,8 +56,8 @@ After resurrect has stopped, clear the restore gate and prepare the current
 snapshot again:
 
 ```sh
-tmux set-option -gu @claude_restoring
-"$plugin"/bin/claude-tmux-resurrect-post-restore
+tmux set-option -gu @agent-resurrect-restoring
+"$plugin"/bin/tmux-agent-resurrect-post-restore
 ```
 
 ## Replacing or removing a shared hook
@@ -67,7 +67,7 @@ one from the configuration file does not remove that captured value on reload.
 Reset setup before changing those callbacks:
 
 ```sh
-"$plugin"/bin/claude-tmux-resurrect-setup --remove
+"$plugin"/bin/tmux-agent-resurrect-setup --remove
 ```
 
 Edit the source configuration, keeping callback definitions before the plugin
@@ -91,7 +91,7 @@ If setup was killed while holding its lock, confirm no setup command is still
 running, then release it and reload the configuration:
 
 ```sh
-tmux wait-for -U claude-tmux-resurrect-setup
+tmux wait-for -U tmux-agent-resurrect-setup
 tmux source-file /path/to/tmux.conf
 ```
 
@@ -101,7 +101,7 @@ Return it to an empty shell prompt, exit copy mode, then detach and attach again
 or run:
 
 ```sh
-"$plugin"/bin/claude-tmux-resurrect-arm "$(tmux display-message -p '#{session_id}')"
+"$plugin"/bin/tmux-agent-resurrect-arm "$(tmux display-message -p '#{session_id}')"
 ```
 
 ## Dependency not found
@@ -117,8 +117,8 @@ Fix the cause and run the exact resume command manually. To deliberately requeue
 from the snapshot, first clear the dispatched flag on that pane:
 
 ```sh
-tmux set-option -pu @claude_launched
-"$plugin"/bin/claude-tmux-resurrect-post-restore
+tmux set-option -pu @agent-resurrect-launched
+"$plugin"/bin/tmux-agent-resurrect-post-restore
 ```
 
 See [compatibility and limitations](compatibility.md) for unsupported setups and

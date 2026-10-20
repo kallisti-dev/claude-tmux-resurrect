@@ -1,4 +1,4 @@
-# claude-tmux-resurrect
+# tmux-agent-resurrect
 
 A tmux plugin that restores Claude Code conversations with
 [tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect).
@@ -22,7 +22,7 @@ tmux-continuum if you use it:
 ```tmux
 set -g @plugin 'tmux-plugins/tpm'
 set -g @plugin 'tmux-plugins/tmux-resurrect'
-set -g @plugin 'kallisti-dev/claude-tmux-resurrect'
+set -g @plugin 'kallisti-dev/tmux-agent-resurrect'
 
 # Keep this line at the end of the configuration.
 run '~/.tmux/plugins/tpm/tpm'
@@ -56,7 +56,7 @@ check and explains any problem it reports. From a shell in a tmux pane, run the
 check directly. The plugin records its directory in a tmux option:
 
 ```sh
-"$(tmux show-options -gqv @claude-tmux-resurrect-dir)"/bin/claude-tmux-resurrect-check
+"$(tmux show-options -gqv @agent-resurrect-dir)"/bin/tmux-agent-resurrect-check
 ```
 
 ### Without TPM
@@ -65,7 +65,7 @@ Clone this repository, then run its entry point from your tmux configuration
 after any `@resurrect-hook-*` options:
 
 ```tmux
-run-shell ~/path/to/claude-tmux-resurrect/claude-tmux-resurrect.tmux
+run-shell ~/path/to/tmux-agent-resurrect/tmux-agent-resurrect.tmux
 ```
 
 ### Updating
@@ -77,7 +77,7 @@ TPM follows the `main` branch. To stay on a release instead, add its tag to the
 plugin line:
 
 ```tmux
-set -g @plugin 'kallisti-dev/claude-tmux-resurrect#v0.1.0'
+set -g @plugin 'kallisti-dev/tmux-agent-resurrect#v0.1.0'
 ```
 
 TPM doesn't move a pinned tag, so change the tag to upgrade.
@@ -91,7 +91,7 @@ them from a running server instead, run this inside it before removing the
 plugin:
 
 ```sh
-"$(tmux show-options -gqv @claude-tmux-resurrect-dir)"/bin/claude-tmux-resurrect-setup --remove
+"$(tmux show-options -gqv @agent-resurrect-dir)"/bin/tmux-agent-resurrect-setup --remove
 ```
 
 ## Usage
@@ -153,14 +153,14 @@ Install each where you configure that program. With Home Manager:
 ```nix
 { inputs, pkgs, ... }:
 let
-  claude-tmux-resurrect = inputs.claude-tmux-resurrect.packages.${pkgs.stdenv.hostPlatform.system};
+  tmux-agent-resurrect = inputs.tmux-agent-resurrect.packages.${pkgs.stdenv.hostPlatform.system};
 in
 {
   programs.tmux.plugins = [
     pkgs.tmuxPlugins.resurrect
-    claude-tmux-resurrect.tmux-plugin
+    tmux-agent-resurrect.tmux-plugin
   ];
-  programs.claude-code.plugins.tmux-resurrect = claude-tmux-resurrect.claude-plugin;
+  programs.claude-code.plugins.tmux-resurrect = tmux-agent-resurrect.claude-plugin;
 }
 ```
 
@@ -179,9 +179,9 @@ Without flakes, `default.nix` builds the same two packages with the nixpkgs
 revision pinned in `flake.lock`, or with a `pkgs` argument you pass:
 
 ```nix
-claude-tmux-resurrect = import (builtins.fetchTarball
-  "https://github.com/kallisti-dev/claude-tmux-resurrect/archive/main.tar.gz") { inherit pkgs; };
-# Then use claude-tmux-resurrect.tmux-plugin and claude-tmux-resurrect.claude-plugin.
+tmux-agent-resurrect = import (builtins.fetchTarball
+  "https://github.com/kallisti-dev/tmux-agent-resurrect/archive/main.tar.gz") { inherit pkgs; };
+# Then use tmux-agent-resurrect.tmux-plugin and tmux-agent-resurrect.claude-plugin.
 ```
 
 ## Development

@@ -60,7 +60,7 @@
           };
           # The tests use these in place of the source, which holds both halves.
           testPlugins = ''
-            export TEST_TMUX_PLUGIN=${packages.tmux-plugin}/share/tmux-plugins/claude-tmux-resurrect
+            export TEST_TMUX_PLUGIN=${packages.tmux-plugin}/share/tmux-plugins/tmux-agent-resurrect
             export TEST_CLAUDE_PLUGIN=${packages.claude-plugin}
           '';
           inherit
@@ -70,7 +70,7 @@
             })
             claude-code
             ;
-          scripts = "claude-tmux-resurrect.tmux bin/* lib/*.sh";
+          scripts = "tmux-agent-resurrect.tmux bin/* lib/*.sh";
           check =
             name: deps: command:
             pkgs.runCommand name { nativeBuildInputs = deps; } ''
@@ -83,7 +83,7 @@
           behavior = ''
             # Darwin's build sandbox cannot execute /usr/bin/env. Patch only
             # disposable test copies; the plugin itself remains portable.
-            patchShebangs --build claude-tmux-resurrect.tmux bin
+            patchShebangs --build tmux-agent-resurrect.tmux bin
             cp -R ${resurrect} "$TMPDIR/resurrect"
             cp -R ${tpm} "$TMPDIR/tpm"
             chmod -R u+w "$TMPDIR/resurrect" "$TMPDIR/tpm"
@@ -117,7 +117,7 @@
                 mkdir -p "$HOME"
                 claude plugin validate --strict .
                 claude plugin validate --strict ${packages.claude-plugin}
-                patchShebangs --build claude-tmux-resurrect.tmux bin
+                patchShebangs --build tmux-agent-resurrect.tmux bin
                 export CLAUDE_BINARY=${pkgs.lib.getExe claude-code}
                 python3 -m unittest discover -s tests -v -f -k test_real_claude
                 ${testPlugins}

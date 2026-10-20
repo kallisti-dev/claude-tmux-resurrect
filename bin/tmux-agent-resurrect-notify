@@ -2,10 +2,10 @@
 # Show a message on attached tmux clients, as scheduled by notify.
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
-# shellcheck source=lib/claude-tmux-resurrect.sh
-source "${BASH_SOURCE[0]%/*}/../lib/claude-tmux-resurrect.sh"
+# shellcheck source=lib/tmux-agent-resurrect.sh
+source "${BASH_SOURCE[0]%/*}/../lib/tmux-agent-resurrect.sh"
 # This reports failures such as a missing jq, so it needs only tmux.
 need tmux
 [[ -n ${TMUX:-} ]] || die 'run inside tmux (TMUX must identify the intended server)'
-[[ $# == 1 ]] || die 'usage: claude-tmux-resurrect-notify MESSAGE'
+[[ $# == 1 ]] || die 'usage: tmux-agent-resurrect-notify MESSAGE'
 show_notice "$1"

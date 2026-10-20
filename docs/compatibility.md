@@ -45,7 +45,7 @@ panes while they launch.
 Hooks cannot guarantee exactly-once execution across a process crash between
 sending Enter and clearing state. A killed dispatcher can also leave its tmux
 lock held; restart the disposable session or, after confirming no dispatcher is
-running, release `claude-tmux-arm-N` with `tmux wait-for -U`.
+running, release `tmux-agent-resurrect-arm-N` with `tmux wait-for -U`.
 
 Abnormally terminated Claude processes may leave their pane ID option behind.
 Clean SessionEnd events clear it. Old snapshots remain local executable-session

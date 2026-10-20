@@ -19,8 +19,8 @@ let
       fileset = lib.fileset.unions (
         [
           ./.claude-plugin/plugin.json
-          ./bin/claude-tmux-resurrect-check
-          ./bin/claude-tmux-resurrect-notify
+          ./bin/tmux-agent-resurrect-check
+          ./bin/tmux-agent-resurrect-notify
           ./docs
           ./lib
           ./LICENSE.md
@@ -42,7 +42,7 @@ let
     done
   '';
   meta = {
-    homepage = "https://github.com/kallisti-dev/claude-tmux-resurrect";
+    homepage = "https://github.com/kallisti-dev/tmux-agent-resurrect";
     license = lib.licenses.bsd3;
     platforms = [
       "aarch64-darwin"
@@ -53,34 +53,34 @@ let
 in
 {
   tmux-plugin = tmuxPlugins.mkTmuxPlugin {
-    pluginName = "claude-tmux-resurrect";
+    pluginName = "tmux-agent-resurrect";
     # The default file name replaces hyphens with underscores.
-    rtpFilePath = "claude-tmux-resurrect.tmux";
+    rtpFilePath = "tmux-agent-resurrect.tmux";
     inherit version;
     # Without the Claude Code hooks, setup leaves CLAUDE_CODE_PLUGIN_DIRS
     # alone and the Claude plugin is installed separately.
     src = source [
-      ./claude-tmux-resurrect.tmux
-      ./bin/claude-tmux-resurrect-arm
-      ./bin/claude-tmux-resurrect-post-restore
-      ./bin/claude-tmux-resurrect-pre-restore
-      ./bin/claude-tmux-resurrect-save
-      ./bin/claude-tmux-resurrect-setup
+      ./tmux-agent-resurrect.tmux
+      ./bin/tmux-agent-resurrect-arm
+      ./bin/tmux-agent-resurrect-post-restore
+      ./bin/tmux-agent-resurrect-pre-restore
+      ./bin/tmux-agent-resurrect-save
+      ./bin/tmux-agent-resurrect-setup
     ];
     nativeBuildInputs = [ makeWrapper ];
     # mkTmuxPlugin sets strictDeps, so patchShebangs finds bash only here.
     buildInputs = [ bash ];
-    postInstall = wrapScripts ''"$out"/share/tmux-plugins/claude-tmux-resurrect/{claude-tmux-resurrect.tmux,bin/*}'';
+    postInstall = wrapScripts ''"$out"/share/tmux-plugins/tmux-agent-resurrect/{tmux-agent-resurrect.tmux,bin/*}'';
     meta = meta // {
       description = "tmux plugin that restores Claude Code conversations with tmux-resurrect";
     };
   };
 
   claude-plugin = stdenvNoCC.mkDerivation {
-    pname = "claude-tmux-resurrect-claude-plugin";
+    pname = "tmux-agent-resurrect-claude-plugin";
     inherit version;
     src = source [
-      ./bin/claude-tmux-resurrect-hook
+      ./bin/tmux-agent-resurrect-hook
       ./hooks
       ./skills
     ];
@@ -95,7 +95,7 @@ in
       runHook postInstall
     '';
     meta = meta // {
-      description = "Claude Code plugin with the session hooks for the claude-tmux-resurrect tmux plugin";
+      description = "Claude Code plugin with the session hooks for the tmux-agent-resurrect tmux plugin";
     };
   };
 }

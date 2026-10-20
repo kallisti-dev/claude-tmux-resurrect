@@ -2,8 +2,8 @@
 # Record and clear Claude session IDs on tmux panes.
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
-# shellcheck source=lib/claude-tmux-resurrect.sh
-source "${BASH_SOURCE[0]%/*}/../lib/claude-tmux-resurrect.sh"
+# shellcheck source=lib/tmux-agent-resurrect.sh
+source "${BASH_SOURCE[0]%/*}/../lib/tmux-agent-resurrect.sh"
 
 # Claude also runs outside tmux; that is a successful no-op.
 [[ -n ${TMUX_PANE:-} && -n ${TMUX:-} ]] || exit 0
@@ -17,21 +17,21 @@ id=$(jq -er '.session_id | select(type == "string")' <<<"$payload") || die 'hook
 valid_id "$id" || die 'invalid hook session_id'
 case "$event" in
   SessionStart)
-    tmux set-option -p -t "$TMUX_PANE" @claude_session_id "$id"
-    tmux set-option -pu -t "$TMUX_PANE" @claude_resume_cmd
-    tmux set-option -pu -t "$TMUX_PANE" @claude_resume_data
+    tmux set-option -p -t "$TMUX_PANE" @agent-resurrect-session "$id"
+    tmux set-option -pu -t "$TMUX_PANE" @agent-resurrect-resume-cmd
+    tmux set-option -pu -t "$TMUX_PANE" @agent-resurrect-resume-data
     # Report a Claude plugin whose version differs from the tmux plugin's: one
     # installed separately, as with the Nix packages, or an earlier copy that
     # a pane opened before the plugin moved still lists in its
     # CLAUDE_CODE_PLUGIN_DIRS, such as a replaced Nix store path.
     dir=${plugin_bin%/bin}
-    loaded=$(tmux show-options -gqv @claude-tmux-resurrect-dir)
+    loaded=$(tmux show-options -gqv @agent-resurrect-dir)
     if [[ -n $loaded && $loaded != "$dir" ]]; then
       version=$(plugin_version "$dir")
-      expected=$(tmux show-options -gqv @claude-tmux-resurrect-version)
+      expected=$(tmux show-options -gqv @agent-resurrect-version)
       mismatch="$version $expected"
-      if [[ $version != "$expected" && $mismatch != "$(tmux show-options -gqv @claude-tmux-resurrect-mismatch)" ]]; then
-        tmux set-option -g @claude-tmux-resurrect-mismatch "$mismatch"
+      if [[ $version != "$expected" && $mismatch != "$(tmux show-options -gqv @agent-resurrect-mismatch)" ]]; then
+        tmux set-option -g @agent-resurrect-mismatch "$mismatch"
         where=$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}:#{window_index}.#{pane_index}')
         if [[ :${CLAUDE_CODE_PLUGIN_DIRS:-}: == *:"$dir":* ]]; then
           fix='start Claude in a new pane'
@@ -44,8 +44,8 @@ case "$event" in
     ;;
   SessionEnd)
     # Compare and clear on the server without yielding to a newer start event.
-    tmux if-shell -F -t "$TMUX_PANE" "#{==:#{@claude_session_id},$id}" \
-      "set-option -pu -t $TMUX_PANE @claude_session_id"
+    tmux if-shell -F -t "$TMUX_PANE" "#{==:#{@agent-resurrect-session},$id}" \
+      "set-option -pu -t $TMUX_PANE @agent-resurrect-session"
     ;;
   *) die "unsupported hook event: $event (expected SessionStart or SessionEnd)" ;;
 esac

@@ -2,32 +2,32 @@
 # Resume pending Claude conversations when their tmux session is attached.
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
-# shellcheck source=lib/claude-tmux-resurrect.sh
-source "${BASH_SOURCE[0]%/*}/../lib/claude-tmux-resurrect.sh"
+# shellcheck source=lib/tmux-agent-resurrect.sh
+source "${BASH_SOURCE[0]%/*}/../lib/tmux-agent-resurrect.sh"
 require_tmux
-[[ $# == 1 || $# == 2 ]] || die 'usage: claude-tmux-resurrect-arm TMUX_SESSION_ID [CLIENT]'
+[[ $# == 1 || $# == 2 ]] || die 'usage: tmux-agent-resurrect-arm TMUX_SESSION_ID [CLIENT]'
 session=$1
 # Attach hooks pass the client, which can show messages kept for it.
 [[ -z ${2:-} ]] || show_kept_notices "$2"
 [[ -n $session ]] || exit 0
-[[ $session =~ ^\$[0-9]+$ ]] || die "claude-tmux-resurrect-arm expects a tmux session ID (\$N), not a name"
-[[ $(tmux show-options -gqv @claude_restoring) != 1 ]] || exit 0
-[[ $(tmux show-options -qv -t "$session" @claude_pending 2>/dev/null) == 1 ]] || exit 0
+[[ $session =~ ^\$[0-9]+$ ]] || die "tmux-agent-resurrect-arm expects a tmux session ID (\$N), not a name"
+[[ $(tmux show-options -gqv @agent-resurrect-restoring) != 1 ]] || exit 0
+[[ $(tmux show-options -qv -t "$session" @agent-resurrect-pending 2>/dev/null) == 1 ]] || exit 0
 [[ $(tmux display-message -p -t "$session" '#{session_attached}') != 0 ]] || exit 0
 need claude
 
 # Two clients may attach simultaneously. Serialize the read/send/clear sequence.
-lock=claude-tmux-arm-${session#\$}
+lock=tmux-agent-resurrect-arm-${session#\$}
 tmux wait-for -L "$lock"
 trap 'tmux wait-for -U "$lock"' EXIT
-[[ $(tmux show-options -gqv @claude_restoring) != 1 ]] || exit 0
+[[ $(tmux show-options -gqv @agent-resurrect-restoring) != 1 ]] || exit 0
 remaining=0
 while IFS= read -r pane; do
-  record=$(pane_option "$pane" @claude_resume_data)
+  record=$(pane_option "$pane" @agent-resurrect-resume-data)
   [[ -n $record ]] || continue
-  if [[ -n $(pane_option "$pane" @claude_session_id) || -n $(pane_option "$pane" @claude_launched) ]]; then
-    tmux set-option -pu -t "$pane" @claude_resume_cmd
-    tmux set-option -pu -t "$pane" @claude_resume_data
+  if [[ -n $(pane_option "$pane" @agent-resurrect-session) || -n $(pane_option "$pane" @agent-resurrect-launched) ]]; then
+    tmux set-option -pu -t "$pane" @agent-resurrect-resume-cmd
+    tmux set-option -pu -t "$pane" @agent-resurrect-resume-data
     continue
   fi
   # Do not type into an editor, copy mode, or another foreground application.
@@ -47,17 +47,17 @@ while IFS= read -r pane; do
     continue
   fi
   if ! cmd=$(resume_command "$record"); then
-    tmux set-option -pu -t "$pane" @claude_resume_cmd
-    tmux set-option -pu -t "$pane" @claude_resume_data
+    tmux set-option -pu -t "$pane" @agent-resurrect-resume-cmd
+    tmux set-option -pu -t "$pane" @agent-resurrect-resume-data
     continue
   fi
   # Literal mode prevents tmux interpreting command text as key names.
   tmux send-keys -l -t "$pane" "$cmd"
   tmux send-keys -t "$pane" Enter
-  tmux set-option -p -t "$pane" @claude_launched 1
-  tmux set-option -pu -t "$pane" @claude_resume_cmd
-  tmux set-option -pu -t "$pane" @claude_resume_data
+  tmux set-option -p -t "$pane" @agent-resurrect-launched 1
+  tmux set-option -pu -t "$pane" @agent-resurrect-resume-cmd
+  tmux set-option -pu -t "$pane" @agent-resurrect-resume-data
 done < <(tmux list-panes -s -t "$session" -F '#{pane_id}')
 if [[ $remaining == 0 ]]; then
-  tmux set-option -u -t "$session" @claude_pending
+  tmux set-option -u -t "$session" @agent-resurrect-pending
 fi
