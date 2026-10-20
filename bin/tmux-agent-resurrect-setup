@@ -11,6 +11,9 @@ require_tmux
 bin_dir=$(cd -- "${BASH_SOURCE[0]%/*}" && pwd)
 plugin_dir=${bin_dir%/bin}
 prefix=@agent-resurrect
+# The option prefix of setup under the plugin's former name,
+# claude-tmux-resurrect, which registered the same hooks with its own scripts.
+former=@claude-tmux-resurrect
 variable=CLAUDE_CODE_PLUGIN_DIRS
 opencode_plugin=opencode/tmux-agent-resurrect.js
 
@@ -113,10 +116,11 @@ register_resurrect_hook() {
   previous=$(option "$prefix-previous-$phase")
   own=$(guarded "$(quote "$bin_dir/$script")")
   if [[ -z $managed || $current != "$managed" ]]; then
-    # Do not capture a wrapper around one of our generated functions and then
-    # nest it again. A directly replaced hook is safe to capture on reload.
+    # Do not capture a wrapper around one of our generated functions, or those
+    # generated under the former name, and then nest it again. A directly
+    # replaced hook is safe to capture on reload.
     [[ -z $managed || $current != *"$managed"* ]] || die "@resurrect-hook-$phase wraps a setup-generated hook; reset that option before running setup"
-    [[ $current != *'__tmux_agent_resurrect_'* ]] || die "@resurrect-hook-$phase wraps a setup-generated hook; reset that option before running setup"
+    [[ $current != *'__tmux_agent_resurrect_'* && $current != *'__claude_tmux_resurrect_'* ]] || die "@resurrect-hook-$phase wraps a setup-generated hook; reset that option before running setup"
     previous=$current
     # Adopt our own command, set without bookkeeping, without running it twice.
     [[ $previous != "$own" ]] || previous=''
@@ -127,8 +131,11 @@ register_resurrect_hook() {
   tmux set-option -g "@resurrect-hook-$phase" "$command"
 }
 
+# Usage: remove_resurrect_hook PREFIX PHASE
+# Restore the resurrect hook for PHASE that setup replaced, as recorded in
+# options beginning PREFIX, if the hook is still setup's.
 remove_resurrect_hook() {
-  local phase=$1 managed previous
+  local prefix=$1 phase=$2 managed previous
   managed=$(option "$prefix-managed-$phase")
   previous=$(option "$prefix-previous-$phase")
   if [[ -n $managed && $(option "@resurrect-hook-$phase") == "$managed" ]]; then
@@ -164,8 +171,11 @@ register_event_hook() {
   tmux set-option -g "$prefix-$event-handler" "$(option "${event}[$slot]")"
 }
 
+# Usage: remove_event_hook PREFIX EVENT
+# Remove setup's handler for the tmux hook EVENT, as recorded in options
+# beginning PREFIX, if its slot still holds that handler.
 remove_event_hook() {
-  local event=$1 slot expected
+  local prefix=$1 event=$2 slot expected
   slot=$(option "$prefix-$event-slot")
   expected=$(option "$prefix-$event-handler")
   if [[ $slot =~ ^[0-9]+$ && -n $expected && $(option "${event}[$slot]") == "$expected" ]]; then
@@ -175,12 +185,63 @@ remove_event_hook() {
   tmux set-option -gu "$prefix-$event-handler"
 }
 
-if [[ ${1:-} == --remove ]]; then
+# Remove what setup registered under the plugin's former name, as that
+# version's own setup --remove does, so its scripts no longer save and resume
+# sessions beside these. Then remove its other global options, and the restore
+# gate that only its scripts read.
+remove_former() {
+  local phase event dir name
+  # Setup under the former name kept its bookkeeping in global options with
+  # its prefix.
+  [[ $(tmux show-options -g) == *"$former-"* ]] || return 0
   for phase in post-save-layout pre-restore-all post-restore-all; do
-    remove_resurrect_hook "$phase"
+    remove_resurrect_hook "$former" "$phase"
   done
   for event in client-attached client-session-changed; do
-    remove_event_hook "$event"
+    remove_event_hook "$former" "$event"
+  done
+  dir=$(option "$former-dir")
+  [[ -z $dir ]] || update_plugin_dirs "$dir"
+  while IFS=' ' read -r name _; do
+    [[ $name != "$former-"* ]] || tmux set-option -gu "$name"
+  done < <(tmux show-options -g)
+  tmux set-option -gu @claude_restoring
+}
+
+# Carry over the resumes that a restore under the former name left pending,
+# and the flags marking the panes it dispatched, since its scripts no longer
+# act on them. Recorded session IDs stay where that version's hook, still run
+# by Claude sessions that loaded it, updates them; see pane_session.
+adopt_former_resumes() {
+  local pane record session
+  while IFS= read -r pane; do
+    [[ -n $pane ]] || continue
+    record=$(former_record "$(pane_option "$pane" @claude_resume_data)")
+    if valid_record "$record"; then
+      tmux set-option -p -t "$pane" @agent-resurrect-resume-data "$record"
+      tmux set-option -p -t "$pane" @agent-resurrect-resume-cmd "$(pane_option "$pane" @claude_resume_cmd)"
+    fi
+    if [[ -n $(pane_option "$pane" @claude_launched) ]]; then
+      tmux set-option -p -t "$pane" @agent-resurrect-launched 1
+    fi
+    tmux set-option -pu -t "$pane" @claude_resume_data
+    tmux set-option -pu -t "$pane" @claude_resume_cmd
+    tmux set-option -pu -t "$pane" @claude_launched
+  done < <(tmux list-panes -a -F '#{?#{@claude_resume_data},#{pane_id},#{?#{@claude_launched},#{pane_id},}}')
+  while IFS= read -r session; do
+    [[ -n $session ]] || continue
+    tmux set-option -t "$session" @agent-resurrect-pending 1
+    tmux set-option -u -t "$session" @claude_pending
+  done < <(tmux list-sessions -F '#{?#{@claude_pending},#{session_id},}')
+}
+
+if [[ ${1:-} == --remove ]]; then
+  remove_former
+  for phase in post-save-layout pre-restore-all post-restore-all; do
+    remove_resurrect_hook "$prefix" "$phase"
+  done
+  for event in client-attached client-session-changed; do
+    remove_event_hook "$prefix" "$event"
   done
   previous=$(option "$prefix-dir")
   if [[ -n $previous ]]; then
@@ -199,6 +260,10 @@ else
     [[ $plugin_dir != *:* ]] || die "$variable cannot list a directory whose path contains ':': $plugin_dir"
     listing=$plugin_dir
   fi
+  # The registrations capture the callbacks that these restore.
+  former_dir=$(option "$former-dir")
+  remove_former
+  adopt_former_resumes
   register_resurrect_hook post-save-layout tmux-agent-resurrect-save
   register_resurrect_hook pre-restore-all tmux-agent-resurrect-pre-restore
   register_resurrect_hook post-restore-all tmux-agent-resurrect-post-restore
@@ -220,9 +285,10 @@ else
   tmux set-option -g "$prefix-dir" "$plugin_dir"
   # The Claude hook compares its own version with this one.
   tmux set-option -g "$prefix-version" "$(plugin_version "$plugin_dir")"
-  # Existing panes keep the environment they started with. When tmux starts,
-  # the configuration loads before any pane exists.
-  if [[ -n $listing$opencode_listing && -z $previous && -n $(tmux list-panes -a -F . 2>/dev/null) ]]; then
+  # Existing panes keep the environment they started with, which lists any
+  # copy loaded under the former name. When tmux starts, the configuration
+  # loads before any pane exists.
+  if [[ -n $listing$opencode_listing && -z $previous$former_dir && -n $(tmux list-panes -a -F . 2>/dev/null) ]]; then
     notify 'loaded; start Claude Code or OpenCode in a new pane so tmux-resurrect can resume it'
   fi
 fi

@@ -23,7 +23,7 @@ while IFS=$'\t' read -r command row; do
   target=$(jq -r '"=" + .session + ":" + .window + "." + .pane' <<<"$row")
   pane=$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null) || continue
   [[ -n $pane ]] || continue
-  session=$(pane_option "$pane" @agent-resurrect-session)
+  session=$(pane_session "$pane")
   if [[ -z $session ]]; then
     # Save-before-attach must not discard sessions still waiting to launch.
     pending=$(pane_option "$pane" @agent-resurrect-resume-data)

@@ -29,8 +29,14 @@ done < <(tmux list-sessions -F '#{session_id}')
 }
 skipped=0
 while IFS= read -r line; do
-  [[ $line == agent-resurrect$'\t'* ]] || continue
-  record=${line#*$'\t'}
+  if [[ $line == agent-resurrect$'\t'* ]]; then
+    record=${line#*$'\t'}
+  elif [[ $line == claude-tmux$'\t'* ]]; then
+    # Saved under the plugin's former name.
+    record=$(former_record "${line#*$'\t'}")
+  else
+    continue
+  fi
   if ! valid_record "$record"; then
     warn 'invalid session metadata in snapshot; skipping' 2>>"$reasons"
     skipped=$((skipped + 1))
@@ -40,7 +46,7 @@ while IFS= read -r line; do
   pane=$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null) || continue
   [[ -n $pane ]] || continue
   # Never inject a second resume into a live or previously launched pane.
-  [[ -z $(pane_option "$pane" @agent-resurrect-session) && -z $(pane_option "$pane" @agent-resurrect-launched) ]] || continue
+  [[ -z $(pane_session "$pane") && -z $(pane_option "$pane" @agent-resurrect-launched) ]] || continue
   if ! cmd=$(resume_command "$record" 2>>"$reasons"); then
     skipped=$((skipped + 1))
     [[ -n ${label:-} ]] || label=$(agent_label "$(jq -r '.agent' <<<"$record")")

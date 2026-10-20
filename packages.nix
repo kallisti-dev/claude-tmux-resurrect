@@ -104,6 +104,9 @@ in
   claude-plugin = agentPlugin {
     agent = "claude";
     files = [
+      # Home Manager links each version at the same path, where Claude
+      # sessions that loaded the plugin under its former name find this.
+      ./bin/claude-tmux-resurrect-hook
       ./bin/tmux-agent-resurrect-claude-hook
       ./hooks
       ./skills

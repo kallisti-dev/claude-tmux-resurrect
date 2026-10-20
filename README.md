@@ -87,6 +87,27 @@ set -g @plugin 'kallisti-dev/tmux-agent-resurrect#v0.1.0'
 
 TPM doesn't move a pinned tag, so change the tag to upgrade.
 
+### Upgrading from claude-tmux-resurrect
+
+Earlier versions of this plugin were named claude-tmux-resurrect. GitHub
+redirects that name, so an existing
+`set -g @plugin 'kallisti-dev/claude-tmux-resurrect'` line keeps working, and
+prefix + U updates the plugin in place. When it loads, the plugin replaces the
+earlier version's registrations, keeping the resurrect callbacks they wrapped.
+It restores snapshots that version saved and keeps track of Claude sessions
+that started under it.
+
+To use the new name instead, replace the line and press prefix + I. That moves
+the plugin to a new directory, and Claude in panes opened before the move keeps
+loading hooks from the old one, so remove the old directory with
+prefix + alt + u after restarting those sessions in new panes.
+
+If Claude Code's settings run `claude-tmux-resurrect-hook`, as instructions
+for earlier versions configured, remove those hooks; the plugin provides its
+own. With Nix, point the flake input at
+`github:kallisti-dev/tmux-agent-resurrect` and install the
+[packages](#nix).
+
 ### Uninstalling
 
 Remove the `@plugin` line and press prefix + alt + u. After TPM deletes the

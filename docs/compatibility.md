@@ -31,7 +31,8 @@ Code uses.
 ## Testing limits
 
 Most tests stub the agents. They verify exact argv, cwd, hook behavior, tmux
-lifecycle, and interoperability with upstream resurrect and TPM. Two tests run
+lifecycle, interoperability with upstream resurrect and TPM, and upgrades from
+the plugin's last version under its former name. Two tests run
 the Claude Code and OpenCode binaries from the pinned nixpkgs, without network
 access, to check that a session started in a new pane loads the plugin and
 records and clears its session ID. Claude Code loads it through

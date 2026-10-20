@@ -117,6 +117,28 @@ otherwise setup chooses another free slot. `tmux-agent-resurrect-setup --remove`
 removes its handlers and restores previous resurrect settings only where the
 current value is still the one setup installed.
 
+## Former name
+
+Earlier versions of the plugin were named claude-tmux-resurrect and used that
+name for their scripts, options, and snapshot records. Before registering its
+own hooks, setup removes that version's registrations as its own
+`claude-tmux-resurrect-setup --remove` would, along with its other
+`@claude-tmux-resurrect-*` options, so it captures the callbacks they wrapped
+instead of nesting them. It also carries over the resumes that a restore by
+that version left pending and the flags on panes it dispatched. `--remove`
+removes both versions' registrations.
+
+Claude Code keeps the hook commands a session loaded when it started, so a
+Claude session that loaded the earlier version keeps running that version's
+hook, which records only the session ID, in `@claude_session_id`. Save,
+restore, and the check read that option for a pane without
+`@agent-resurrect-session`, and the current hook clears it when it records or
+ends a session. Where the plugin directory was updated in place, as in a TPM
+clone or a Home Manager link, such a session runs
+`claude-tmux-resurrect-hook`, which runs the current hook. Restore also reads
+the earlier version's snapshot records, which begin `claude-tmux` and do not
+name an agent, as Claude's.
+
 ## Components
 
 | Component | Responsibility |
@@ -125,6 +147,7 @@ current value is still the one setup installed.
 | `.claude-plugin/plugin.json`, `hooks/hooks.json` | Claude Code plugin manifest and session hook configuration |
 | `tmux-agent-resurrect-setup [--remove]` | Register or remove hooks and the `CLAUDE_CODE_PLUGIN_DIRS` entry while preserving other integrations |
 | `tmux-agent-resurrect-claude-hook` | Claude Code's session hook: record `@agent-resurrect-session` on SessionStart; clear a matching session on SessionEnd |
+| `claude-tmux-resurrect-hook` | The session hook's [former name](#former-name), for Claude sessions that loaded it: run `tmux-agent-resurrect-claude-hook` |
 | `tmux-agent-resurrect-record start\|end AGENT ID [DIR]` | Record or clear a session on the calling pane, for agent plugins such as OpenCode's |
 | `tmux-agent-resurrect-save SNAPSHOT` | Resolve cwd/worktree, embed mappings, blank generic saved agent commands |
 | `tmux-agent-resurrect-pre-restore` | Suppress launches during resurrect's layout restoration |

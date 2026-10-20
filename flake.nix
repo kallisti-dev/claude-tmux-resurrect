@@ -11,6 +11,12 @@
       url = "github:tmux-plugins/tpm";
       flake = false;
     };
+    # The last version of this plugin under its former name, whose state the
+    # tests upgrade.
+    claude-tmux-resurrect = {
+      url = "github:kallisti-dev/tmux-agent-resurrect/8ee37b2499c0432991473ca17d9aff3de059bac4";
+      flake = false;
+    };
   };
 
   outputs =
@@ -18,6 +24,7 @@
       nixpkgs,
       resurrect,
       tpm,
+      claude-tmux-resurrect,
       ...
     }:
     let
@@ -91,9 +98,11 @@
             patchShebangs --build tmux-agent-resurrect.tmux bin
             cp -R ${resurrect} "$TMPDIR/resurrect"
             cp -R ${tpm} "$TMPDIR/tpm"
-            chmod -R u+w "$TMPDIR/resurrect" "$TMPDIR/tpm"
-            patchShebangs --build "$TMPDIR/resurrect" "$TMPDIR/tpm"
+            cp -R ${claude-tmux-resurrect} "$TMPDIR/claude-tmux-resurrect"
+            chmod -R u+w "$TMPDIR/resurrect" "$TMPDIR/tpm" "$TMPDIR/claude-tmux-resurrect"
+            patchShebangs --build "$TMPDIR/resurrect" "$TMPDIR/tpm" "$TMPDIR/claude-tmux-resurrect"
             export RESURRECT_SOURCE="$TMPDIR/resurrect" TPM_SOURCE="$TMPDIR/tpm"
+            export CLAUDE_TMUX_RESURRECT_SOURCE="$TMPDIR/claude-tmux-resurrect"
             python3 -m unittest discover -s tests -v -f
           '';
           individualChecks = {
@@ -166,6 +175,7 @@
               ];
             RESURRECT_SOURCE = "${resurrect}";
             TPM_SOURCE = "${tpm}";
+            CLAUDE_TMUX_RESURRECT_SOURCE = "${claude-tmux-resurrect}";
           };
           formatter = pkgs.nixfmt;
         };

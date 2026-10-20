@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Claude Code keeps the hook commands that a session loaded when it started.
+# Sessions that loaded this plugin under its former name, claude-tmux-resurrect,
+# run its session hook by this name, so this runs the current hook for them.
+# SPDX-License-Identifier: BSD-3-Clause
+exec "${BASH_SOURCE[0]%/*}/tmux-agent-resurrect-claude-hook" "$@"

@@ -53,6 +53,14 @@ else
   problem 'tmux-resurrect is not loaded'
 fi
 
+# Setup removes the registrations made under the plugin's former name, so any
+# left mean that version loaded after it or setup has not run since. That
+# version records them in its options for managed resurrect hooks and tmux
+# hook slots.
+if [[ $'\n'$(tmux show-options -g) =~ $'\n'@claude-tmux-resurrect-(managed|client)- ]]; then
+  problem 'the plugin is still registered under its former name, claude-tmux-resurrect; remove anything that loads that version from the tmux configuration, then reload it'
+fi
+
 # A tmux plugin directory that holds the Claude Code hooks, such as a TPM
 # clone, lists itself in CLAUDE_CODE_PLUGIN_DIRS. The Nix tmux package leaves
 # them to a separately installed Claude plugin.
@@ -134,7 +142,7 @@ while IFS=$'\t' read -r pane where command; do
   if [[ -z $running ]] || reports_late "$running"; then
     continue
   fi
-  [[ -z $(pane_option "$pane" @agent-resurrect-session) ]] || continue
+  [[ -z $(pane_session "$pane") ]] || continue
   unrecorded+=("$(agent_label "$running") in $where")
 done < <(tmux list-panes -a -F $'#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}')
 if [[ ${#unrecorded[@]} == 0 ]]; then
@@ -144,7 +152,7 @@ else
 fi
 
 if [[ -n $session && -n ${TMUX_PANE:-} ]]; then
-  recorded=$(pane_option "$TMUX_PANE" @agent-resurrect-session)
+  recorded=$(pane_session "$TMUX_PANE")
   if [[ ${recorded#* } == "$session" ]]; then
     ok "this pane records session $session"
   else
