@@ -10,10 +10,11 @@ One foreground Claude conversation per pane is supported. Fish, Nushell, native
 Windows, and remote Claude processes are unsupported. Linux under WSL2 is
 untested.
 
-Claude Code loads the plugin's hooks through `CLAUDE_CODE_PLUGIN_DIRS`, which
-requires version 2.1.280 or later; earlier versions ignore the variable, so
-their sessions are not tracked. Organization policies that stop these hooks are
-unsupported: [managed settings](https://code.claude.com/docs/en/managed-settings)
+With a TPM installation, Claude Code loads the plugin's hooks through
+`CLAUDE_CODE_PLUGIN_DIRS`, which requires version 2.1.280 or later; earlier
+versions ignore the variable, so their sessions are not tracked. Home Manager
+installs the Nix Claude plugin as a personal plugin, which requires 2.1.157 or
+later. Organization policies that stop these hooks are unsupported: [managed settings](https://code.claude.com/docs/en/managed-settings)
 can turn off plugins loaded from `CLAUDE_CODE_PLUGIN_DIRS`, `allowManagedHooksOnly`
 runs only hooks from managed settings and the plugins they force-enable, and
 `disableAllHooks` stops all hooks. `/status` shows which managed settings Claude
@@ -25,8 +26,10 @@ Most tests stub Claude. They verify exact argv, cwd, hook behavior, tmux
 lifecycle, and interoperability with upstream resurrect and TPM. One test runs
 the Claude Code binary from the pinned nixpkgs, without network access, to check
 that a session started in a new pane loads the plugin and records and clears its
-session ID. The tests do not cover Claude authentication, transcript
-compatibility across versions, or an actual conversation resumption.
+session ID: through `CLAUDE_CODE_PLUGIN_DIRS` from the source, and from the
+`skills` directory for the Nix packages. The tests do not cover Claude
+authentication, transcript compatibility across versions, or an actual
+conversation resumption.
 
 The transcript directory layout and top-level `cwd` fields are an integration
 assumption and can change with Claude versions. Worktree inference covers the

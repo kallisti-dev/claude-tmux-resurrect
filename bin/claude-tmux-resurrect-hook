@@ -20,9 +20,10 @@ case "$event" in
     tmux set-option -p -t "$TMUX_PANE" @claude_session_id "$id"
     tmux set-option -pu -t "$TMUX_PANE" @claude_resume_cmd
     tmux set-option -pu -t "$TMUX_PANE" @claude_resume_data
-    # A pane keeps the CLAUDE_CODE_PLUGIN_DIRS it started with, so Claude can
-    # load an earlier copy of the plugin than this tmux server runs, such as a
-    # replaced Nix store path. Report copies whose versions differ.
+    # Report a Claude plugin whose version differs from the tmux plugin's: one
+    # installed separately, as with the Nix packages, or an earlier copy that
+    # a pane opened before the plugin moved still lists in its
+    # CLAUDE_CODE_PLUGIN_DIRS, such as a replaced Nix store path.
     dir=${plugin_bin%/bin}
     loaded=$(tmux show-options -gqv @claude-tmux-resurrect-dir)
     if [[ -n $loaded && $loaded != "$dir" ]]; then
@@ -32,7 +33,12 @@ case "$event" in
       if [[ $version != "$expected" && $mismatch != "$(tmux show-options -gqv @claude-tmux-resurrect-mismatch)" ]]; then
         tmux set-option -g @claude-tmux-resurrect-mismatch "$mismatch"
         where=$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}:#{window_index}.#{pane_index}')
-        notify "Claude in $where loaded plugin version ${version:-unknown}, but tmux runs ${expected:-unknown}; start Claude in a new pane"
+        if [[ :${CLAUDE_CODE_PLUGIN_DIRS:-}: == *:"$dir":* ]]; then
+          fix='start Claude in a new pane'
+        else
+          fix='install the same version of both plugins'
+        fi
+        notify "Claude in $where loaded plugin version ${version:-unknown}, but tmux runs ${expected:-unknown}; $fix"
       fi
     fi
     ;;

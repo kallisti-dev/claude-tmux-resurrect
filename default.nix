@@ -23,4 +23,6 @@
         overlays = [ ];
       },
 }:
-pkgs.callPackage ./package.nix { }
+{
+  inherit (pkgs.callPackage ./packages.nix { }) tmux-plugin claude-plugin;
+}

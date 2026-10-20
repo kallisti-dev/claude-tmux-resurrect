@@ -55,8 +55,14 @@
             shfmt
             ruff
           ];
-          package = pkgs.callPackage ./package.nix { };
-          pluginRoot = "${package}/share/tmux-plugins/claude-tmux-resurrect";
+          packages = {
+            inherit (pkgs.callPackage ./packages.nix { }) tmux-plugin claude-plugin;
+          };
+          # The tests use these in place of the source, which holds both halves.
+          testPlugins = ''
+            export TEST_TMUX_PLUGIN=${packages.tmux-plugin}/share/tmux-plugins/claude-tmux-resurrect
+            export TEST_CLAUDE_PLUGIN=${packages.claude-plugin}
+          '';
           inherit
             (import nixpkgs {
               inherit system;
@@ -99,7 +105,7 @@
             '';
             behavior = check "behavior" (runtime ++ testTools) behavior;
             packaging = check "packaging" (runtime ++ testTools) ''
-              export PLUGIN_ROOT=${pluginRoot}
+              ${testPlugins}
               ${behavior}
             '';
             # Claude Code fails to format numbers inside the Darwin sandbox,
@@ -110,37 +116,33 @@
                 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
                 mkdir -p "$HOME"
                 claude plugin validate --strict .
-                claude plugin validate --strict ${pluginRoot}
+                claude plugin validate --strict ${packages.claude-plugin}
                 patchShebangs --build claude-tmux-resurrect.tmux bin
                 export CLAUDE_BINARY=${pkgs.lib.getExe claude-code}
                 python3 -m unittest discover -s tests -v -f -k test_real_claude
-                PLUGIN_ROOT=${pluginRoot} python3 -m unittest discover -s tests -v -f -k test_real_claude
+                ${testPlugins}
+                python3 -m unittest discover -s tests -v -f -k test_real_claude
               '').overrideAttrs
                 { __noChroot = pkgs.stdenv.hostPlatform.isDarwin; };
             nonflake =
               let
-                pinnedPackage = import ./default.nix { inherit system; };
-                suppliedPackage = import ./default.nix { inherit pkgs; };
+                pinned = import ./default.nix { inherit system; };
+                supplied = import ./default.nix { inherit pkgs; };
+                drvPaths = pkgs.lib.mapAttrs (_: package: package.drvPath);
               in
               assert pkgs.lib.assertMsg (
-                pinnedPackage.drvPath == package.drvPath
-              ) "default.nix and the flake must build the same pinned package";
+                drvPaths pinned == drvPaths packages
+              ) "default.nix and the flake must build the same pinned packages";
               assert pkgs.lib.assertMsg (
-                suppliedPackage.drvPath == package.drvPath
+                drvPaths supplied == drvPaths packages
               ) "default.nix must support a caller-supplied pkgs";
-              pkgs.linkFarm "nonflake-package" [
-                {
-                  name = "package";
-                  path = pinnedPackage;
-                }
-              ];
+              pkgs.linkFarm "nonflake-packages" (
+                pkgs.lib.mapAttrsToList (name: path: { inherit name path; }) pinned
+              );
           };
         in
         {
-          packages = {
-            default = package;
-            claude-tmux-resurrect = package;
-          };
+          inherit packages;
           checks = individualChecks // {
             all = pkgs.linkFarm "checks-${system}" (
               pkgs.lib.mapAttrsToList (name: path: { inherit name path; }) individualChecks

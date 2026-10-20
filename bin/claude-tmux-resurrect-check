@@ -53,6 +53,10 @@ else
   problem 'tmux-resurrect is not loaded'
 fi
 
+# A tmux plugin directory that holds the Claude Code hooks, such as a TPM
+# clone, lists itself in CLAUDE_CODE_PLUGIN_DIRS. The Nix tmux package leaves
+# them to a separately installed Claude plugin.
+listing=''
 if [[ -z $dir ]]; then
   problem 'the plugin has not loaded in this tmux server; check its @plugin line, then reload the configuration'
 else
@@ -64,17 +68,20 @@ else
       problem "@resurrect-hook-$phase was replaced after the plugin loaded; set resurrect hooks before the plugin loads"
     fi
   done
-  server_dirs=$(tmux show-environment -g CLAUDE_CODE_PLUGIN_DIRS 2>/dev/null || true)
-  server_dirs=${server_dirs#CLAUDE_CODE_PLUGIN_DIRS=}
-  if listed "$server_dirs" "$dir"; then
-    ok "new panes list the plugin in CLAUDE_CODE_PLUGIN_DIRS"
-  else
-    problem "tmux's global CLAUDE_CODE_PLUGIN_DIRS doesn't list the plugin; reload the tmux configuration"
-  fi
-  if listed "${CLAUDE_CODE_PLUGIN_DIRS:-}" "$dir"; then
-    ok "this shell's CLAUDE_CODE_PLUGIN_DIRS lists the plugin"
-  else
-    problem "this shell's CLAUDE_CODE_PLUGIN_DIRS doesn't list the plugin, so Claude started here won't record its session; use a new pane"
+  if [[ -f $dir/hooks/hooks.json ]]; then
+    listing=$dir
+    server_dirs=$(tmux show-environment -g CLAUDE_CODE_PLUGIN_DIRS 2>/dev/null || true)
+    server_dirs=${server_dirs#CLAUDE_CODE_PLUGIN_DIRS=}
+    if listed "$server_dirs" "$dir"; then
+      ok "new panes list the plugin in CLAUDE_CODE_PLUGIN_DIRS"
+    else
+      problem "tmux's global CLAUDE_CODE_PLUGIN_DIRS doesn't list the plugin; reload the tmux configuration"
+    fi
+    if listed "${CLAUDE_CODE_PLUGIN_DIRS:-}" "$dir"; then
+      ok "this shell's CLAUDE_CODE_PLUGIN_DIRS lists the plugin"
+    else
+      problem "this shell's CLAUDE_CODE_PLUGIN_DIRS doesn't list the plugin, so Claude started here won't record its session; use a new pane"
+    fi
   fi
 fi
 
@@ -83,18 +90,28 @@ if ! command -v claude >/dev/null 2>&1; then
 else
   claude_version=$(claude --version 2>/dev/null || true)
   claude_version=${claude_version%% *}
-  if at_least "${claude_version:-0}" 2.1.280; then
-    ok "Claude Code $claude_version"
+  if [[ -z $listing ]] || at_least "${claude_version:-0}" 2.1.280; then
+    ok "Claude Code ${claude_version:-(unknown version)}"
   else
     problem "Claude Code ${claude_version:-(unknown version)} is older than 2.1.280, which loads plugins from CLAUDE_CODE_PLUGIN_DIRS"
   fi
-  if [[ -n $dir ]]; then
+  if [[ -n $listing ]]; then
     # Ask what Claude would load in a new pane.
     plugins=$(CLAUDE_CODE_PLUGIN_DIRS=$server_dirs claude plugin list --json 2>/dev/null || true)
     if jq -e --arg dir "$dir" 'any(.[]; .id == "tmux-resurrect@inline" and .enabled and .installPath == $dir)' >/dev/null 2>&1 <<<"$plugins"; then
       ok 'Claude Code loads the plugin as tmux-resurrect@inline'
     else
       problem "Claude Code doesn't load the plugin from $dir; see /plugin in a Claude session started in a new pane"
+    fi
+  elif [[ -n $dir ]]; then
+    plugins=$(claude plugin list --json 2>/dev/null || true)
+    found=$(jq -r 'first(.[] | select((.id | startswith("tmux-resurrect@")) and .enabled) | "\(.version // "")\t\(.id)") // empty' 2>/dev/null <<<"$plugins" || true)
+    if [[ -z $found ]]; then
+      problem "Claude Code doesn't load the tmux-resurrect plugin; install the Claude plugin with the tmux plugin"
+    elif [[ ${found%%$'\t'*} != "$version" ]]; then
+      problem "Claude Code loads ${found#*$'\t'} ${found%%$'\t'*}, but tmux runs $version; install the same version of both plugins"
+    else
+      ok "Claude Code loads the plugin as ${found#*$'\t'}"
     fi
   fi
 fi

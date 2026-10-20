@@ -24,17 +24,18 @@ line. Inspect the current pane:
 tmux show-options -pqv @claude_session_id
 ```
 
-An empty value means Claude's session hook has not run in that pane. Claude
-loads the hook only when the pane's environment lists the plugin directory,
-which is true of panes opened after the plugin loaded. Check in the pane's
-shell:
+An empty value means Claude's session hook has not run in that pane. With TPM,
+Claude loads the hook only when the pane's environment lists the plugin
+directory, which is true of panes opened after the plugin loaded. Check in the
+pane's shell:
 
 ```sh
 printenv CLAUDE_CODE_PLUGIN_DIRS
 ```
 
-In Claude Code, `/plugin` lists the hook's plugin as `tmux-resurrect@inline`.
-Start or resume Claude in a pane that lists the directory, then save again.
+In Claude Code, `/plugin` lists the hook's plugin as `tmux-resurrect@inline`,
+or as `tmux-resurrect@skills-dir` for the Nix Claude plugin installed with Home
+Manager. Start or resume Claude where it loads the plugin, then save again.
 
 ## No resume after attach
 

@@ -7,8 +7,10 @@ A tmux plugin that restores Claude Code conversations with
 
 - macOS or Linux
 - tmux 3.2 or newer, with tmux-resurrect
-- Claude Code 2.1.280 or newer
-- Bash 3.2 or newer and jq 1.6 or newer on the tmux server's `PATH`
+- Claude Code 2.1.280 or newer, or 2.1.157 or newer with the
+  [Nix packages](#nix) and Home Manager
+- Bash 3.2 or newer and jq 1.6 or newer on the tmux server's `PATH`, unless
+  you use the Nix packages
 - [TPM](https://github.com/tmux-plugins/tpm), or another way to load a tmux
   plugin
 
@@ -139,28 +141,47 @@ configuration directory per tmux server is supported.
 
 ## Nix
 
-The flake's default package is the tmux plugin, built with nixpkgs'
-`tmuxPlugins.mkTmuxPlugin`, with its runtime dependencies wrapped in. Add it
-wherever you list tmux plugins. For example, with Home Manager:
+The flake provides the two halves as separate packages, each with its runtime
+dependencies wrapped in:
+
+- `tmux-plugin`, built with nixpkgs' `tmuxPlugins.mkTmuxPlugin`
+- `claude-plugin`, the Claude Code plugin with the session hooks and
+  `/tmux-resurrect:check`
+
+Install each where you configure that program. With Home Manager:
 
 ```nix
-programs.tmux.plugins = [
-  pkgs.tmuxPlugins.resurrect
-  inputs.claude-tmux-resurrect.packages.${pkgs.stdenv.hostPlatform.system}.default
-];
+{ inputs, pkgs, ... }:
+let
+  claude-tmux-resurrect = inputs.claude-tmux-resurrect.packages.${pkgs.stdenv.hostPlatform.system};
+in
+{
+  programs.tmux.plugins = [
+    pkgs.tmuxPlugins.resurrect
+    claude-tmux-resurrect.tmux-plugin
+  ];
+  programs.claude-code.plugins.tmux-resurrect = claude-tmux-resurrect.claude-plugin;
+}
 ```
 
-NixOS's `programs.tmux.plugins` takes the same list. Both modules load plugins
-before `programs.tmux.extraConfig`, so set any `@resurrect-hook-*` options in a
-plugin entry's `extraConfig` with Home Manager, or in
-`programs.tmux.extraConfigBeforePlugins` with NixOS.
+Home Manager links the Claude plugin into Claude Code's `skills` directory,
+where Claude Code 2.1.157 or newer loads it in every session. The tmux plugin
+then leaves `CLAUDE_CODE_PLUGIN_DIRS` alone, so restarting Claude in any pane
+loads the hooks. Without Home Manager's `programs.claude-code`, link the Claude
+plugin package to `~/.claude/skills/tmux-resurrect` yourself. NixOS's
+`programs.tmux.plugins` takes the same tmux plugin.
 
-Without flakes, `default.nix` builds the same package with the nixpkgs revision
-pinned in `flake.lock`, or with a `pkgs` argument you pass:
+Both modules load tmux plugins before `programs.tmux.extraConfig`, so set any
+`@resurrect-hook-*` options in a plugin entry's `extraConfig` with Home
+Manager, or in `programs.tmux.extraConfigBeforePlugins` with NixOS.
+
+Without flakes, `default.nix` builds the same two packages with the nixpkgs
+revision pinned in `flake.lock`, or with a `pkgs` argument you pass:
 
 ```nix
 claude-tmux-resurrect = import (builtins.fetchTarball
   "https://github.com/kallisti-dev/claude-tmux-resurrect/archive/main.tar.gz") { inherit pkgs; };
+# Then use claude-tmux-resurrect.tmux-plugin and claude-tmux-resurrect.claude-plugin.
 ```
 
 ## Development
@@ -179,7 +200,7 @@ To also run the tests that start Claude Code, without network access, set
 CLAUDE_BINARY=$(command -v claude) python3 -m unittest discover -s tests -k test_real_claude
 ```
 
-`nix flake check` runs the tests against the source and the Nix package, along
+`nix flake check` runs the tests against the source and the Nix packages, along
 with linting and formatting checks and the Claude Code tests. On macOS, the
 Claude Code check needs the Nix build sandbox off or relaxed, as building
 claude-code there does.

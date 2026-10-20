@@ -153,12 +153,20 @@ if [[ ${1:-} == --remove ]]; then
   for event in client-attached client-session-changed; do
     remove_event_hook "$event"
   done
-  listed=$(option "$prefix-dir")
-  [[ -z $listed ]] || update_plugin_dirs "$listed"
+  previous=$(option "$prefix-dir")
+  [[ -z $previous ]] || update_plugin_dirs "$previous"
   tmux set-option -gu "$prefix-dir"
   tmux set-option -gu "$prefix-version"
 else
-  [[ $plugin_dir != *:* ]] || die "$variable cannot list a directory whose path contains ':': $plugin_dir"
+  # A plugin directory that also holds the Claude Code hooks, such as a TPM
+  # clone, lists itself in CLAUDE_CODE_PLUGIN_DIRS, and Claude Code loads each
+  # listed directory in place as a session-only plugin. Without them, as in
+  # the Nix tmux package, the Claude plugin is installed separately.
+  listing=''
+  if [[ -f $plugin_dir/hooks/hooks.json ]]; then
+    [[ $plugin_dir != *:* ]] || die "$variable cannot list a directory whose path contains ':': $plugin_dir"
+    listing=$plugin_dir
+  fi
   register_resurrect_hook post-save-layout claude-tmux-resurrect-save
   register_resurrect_hook pre-restore-all claude-tmux-resurrect-pre-restore
   register_resurrect_hook post-restore-all claude-tmux-resurrect-post-restore
@@ -168,16 +176,14 @@ else
   # passes the client that shows messages kept while none was attached.
   register_event_hook client-attached "run-shell -b $(quote "$arm #{q:session_id} #{q:client_name}")"
   register_event_hook client-session-changed "run-shell -b $(quote "$arm #{q:session_id}")"
-  # Claude Code loads each listed directory in place as a session-only
-  # plugin, which runs this plugin's hooks/hooks.json.
-  listed=$(option "$prefix-dir")
-  update_plugin_dirs "$listed" "$plugin_dir"
+  previous=$(option "$prefix-dir")
+  [[ -z $previous && -z $listing ]] || update_plugin_dirs "$previous" "$listing"
   tmux set-option -g "$prefix-dir" "$plugin_dir"
   # The Claude hook compares its own version with this one.
   tmux set-option -g "$prefix-version" "$(plugin_version "$plugin_dir")"
   # Existing panes keep the environment they started with. When tmux starts,
   # the configuration loads before any pane exists.
-  if [[ -z $listed && -n $(tmux list-panes -a -F . 2>/dev/null) ]]; then
+  if [[ -n $listing && -z $previous && -n $(tmux list-panes -a -F . 2>/dev/null) ]]; then
     notify 'loaded; start Claude in a new pane so tmux-resurrect can resume it'
   fi
 fi

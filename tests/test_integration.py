@@ -11,11 +11,22 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-# The packaging check points this at the built plugin instead of the source.
-PLUGIN_ROOT = Path(os.environ.get("PLUGIN_ROOT", ROOT))
-PLUGIN_FILES = ["claude-tmux-resurrect.tmux", "bin", "lib", "hooks", ".claude-plugin"]
-BIN = PLUGIN_ROOT / "bin"
-ENTRY = PLUGIN_ROOT / "claude-tmux-resurrect.tmux"
+# The packaging check points these at the two Nix packages. The source, like a
+# TPM clone, holds both halves, and its tmux half lists it in
+# CLAUDE_CODE_PLUGIN_DIRS.
+TMUX_PLUGIN = Path(os.environ.get("TEST_TMUX_PLUGIN", ROOT))
+CLAUDE_PLUGIN = Path(os.environ.get("TEST_CLAUDE_PLUGIN", ROOT))
+SEPARATE = TMUX_PLUGIN != CLAUDE_PLUGIN
+PLUGIN_FILES = [
+    "claude-tmux-resurrect.tmux",
+    "bin",
+    "lib",
+    "hooks",
+    "skills/check",
+    ".claude-plugin",
+]
+BIN = TMUX_PLUGIN / "bin"
+ENTRY = TMUX_PLUGIN / "claude-tmux-resurrect.tmux"
 BASH = shutil.which("bash")
 TMUX = shutil.which("tmux")
 PYTHON = shutil.which("python3")
@@ -23,6 +34,7 @@ GIT = shutil.which("git")
 RESURRECT = os.environ.get("RESURRECT_SOURCE")
 TPM = os.environ.get("TPM_SOURCE")
 CLAUDE = os.environ.get("CLAUDE_BINARY")
+VERSION = json.loads((ROOT / ".claude-plugin/plugin.json").read_text())["version"]
 ID = "11111111-2222-3333-4444-555555555555"
 
 
@@ -141,8 +153,10 @@ class Integration(unittest.TestCase):
         return self.run_command([TMUX, "-S", str(self.socket), *args], **kwargs)
 
     def script(self, name, *args, data=None, env=None, check=True):
+        # Claude runs the hook from the Claude plugin; tmux runs the rest.
+        bin = CLAUDE_PLUGIN / "bin" if name == "claude-tmux-resurrect-hook" else BIN
         return self.run_command(
-            [str(BIN / name), *map(str, args)], data=data, env=env, check=check
+            [str(bin / name), *map(str, args)], data=data, env=env, check=check
         )
 
     def stop_server(self):
@@ -345,18 +359,22 @@ class Integration(unittest.TestCase):
         return self.run_with_git(GIT, "-C", directory, *args)
 
     def copy_plugin(self, destination):
-        # A Nix wrapper runs its wrapped script from the store, so copy the
-        # wrapped script itself; the copy then runs from where it is.
-        for name in PLUGIN_FILES:
-            source = PLUGIN_ROOT / name
-            for path in [source] if source.is_file() else sorted(source.iterdir()):
-                if path.name.startswith("."):
+        # Copies both halves into one directory, as in a TPM clone. A Nix
+        # wrapper runs its wrapped script from the store, so copy the wrapped
+        # script itself; the copy then runs from where it is.
+        for root in dict.fromkeys([TMUX_PLUGIN, CLAUDE_PLUGIN]):
+            for name in PLUGIN_FILES:
+                source = root / name
+                if not source.exists():
                     continue
-                wrapped = path.with_name(f".{path.name}-wrapped")
-                copied = destination / path.relative_to(PLUGIN_ROOT)
-                copied.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(wrapped if wrapped.is_file() else path, copied)
-                copied.chmod(0o755 if os.access(path, os.X_OK) else 0o644)
+                for path in [source] if source.is_file() else sorted(source.iterdir()):
+                    if path.name.startswith("."):
+                        continue
+                    wrapped = path.with_name(f".{path.name}-wrapped")
+                    copied = destination / path.relative_to(root)
+                    copied.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(wrapped if wrapped.is_file() else path, copied)
+                    copied.chmod(0o755 if os.access(path, os.X_OK) else 0o644)
 
     def test_setup_registers_guarded_commands_and_rejects_recapturing_them(self):
         self.load_plugin()
@@ -574,14 +592,15 @@ class Integration(unittest.TestCase):
             # Run the registered command synchronously to observe its status.
             self.tmux("run-shell", handler[2])
 
+    @unittest.skipIf(SEPARATE, "the packaged tmux plugin does not hold the hooks")
     def test_new_panes_list_the_plugin_beside_other_plugin_directories(self):
         self.tmux("set-environment", "-g", "CLAUDE_CODE_PLUGIN_DIRS", "/other/plugins")
         self.load_plugin()
         self.load_plugin()
-        listed = f"/other/plugins:{PLUGIN_ROOT}"
+        listed = f"/other/plugins:{TMUX_PLUGIN}"
         self.assertEqual(self.plugin_dirs(), listed)
         self.assertEqual(
-            self.global_option("@claude-tmux-resurrect-dir"), str(PLUGIN_ROOT)
+            self.global_option("@claude-tmux-resurrect-dir"), str(TMUX_PLUGIN)
         )
         output = self.base / "pane environment"
         self.tmux(
@@ -598,11 +617,40 @@ class Integration(unittest.TestCase):
         self.assertEqual(self.plugin_dirs(), "/other/plugins")
         self.assertEqual(self.global_option("@claude-tmux-resurrect-dir"), "")
 
+    @unittest.skipIf(SEPARATE, "the packaged tmux plugin does not hold the hooks")
     def test_remove_unsets_a_plugin_list_with_only_this_plugin(self):
         self.load_plugin()
-        self.assertEqual(self.plugin_dirs(), str(PLUGIN_ROOT))
+        self.assertEqual(self.plugin_dirs(), str(TMUX_PLUGIN))
         self.script("claude-tmux-resurrect-setup", "--remove")
         self.assertIsNone(self.plugin_dirs())
+
+    def test_a_tmux_plugin_without_the_claude_hooks_is_not_listed(self):
+        self.tmux("set-environment", "-g", "CLAUDE_CODE_PLUGIN_DIRS", "/other/plugins")
+        with_hooks = self.base / "with hooks"
+        self.copy_plugin(with_hooks)
+        self.load_plugin(with_hooks / "claude-tmux-resurrect.tmux")
+        self.assertEqual(self.plugin_dirs(), f"/other/plugins:{with_hooks}")
+        # Moving to a copy without them, as when switching to the Nix
+        # packages, removes the earlier entry.
+        without = self.base / "without hooks"
+        self.copy_plugin(without)
+        shutil.rmtree(without / "hooks")
+        self.load_plugin(without / "claude-tmux-resurrect.tmux")
+        self.assertEqual(self.plugin_dirs(), "/other/plugins")
+        self.assertEqual(self.global_option("@claude-tmux-resurrect-dir"), str(without))
+        self.assertEqual(self.global_option("@claude-tmux-resurrect-version"), VERSION)
+
+    @unittest.skipUnless(SEPARATE, "checks the packaged tmux plugin")
+    def test_packaged_tmux_plugin_leaves_the_plugin_list_alone(self):
+        self.assertFalse((TMUX_PLUGIN / "hooks").exists())
+        self.attach()
+        self.load_plugin()
+        self.assertIsNone(self.plugin_dirs())
+        self.assertEqual(
+            self.global_option("@claude-tmux-resurrect-dir"), str(TMUX_PLUGIN)
+        )
+        self.assertEqual(self.global_option("@claude-tmux-resurrect-version"), VERSION)
+        self.expect_no_new_messages(0)
 
     def test_plugin_directory_with_a_colon_is_rejected(self):
         copy = self.base / "plugin:copy"
@@ -636,6 +684,16 @@ class Integration(unittest.TestCase):
         time.sleep(1.5)
         self.assertEqual(len(self.messages()), count)
 
+    def load_with_client(self):
+        # Return the number of messages once the first-load notice, which only
+        # a plugin that lists itself in CLAUDE_CODE_PLUGIN_DIRS shows, is in.
+        self.load_plugin()
+        self.attach()
+        if not SEPARATE:
+            self.expect_message("loaded")
+        return len(self.messages())
+
+    @unittest.skipIf(SEPARATE, "the packaged tmux plugin does not hold the hooks")
     def test_first_load_notice_is_kept_until_a_client_attaches(self):
         self.load_plugin()
         notices = "@claude-tmux-resurrect-notices"
@@ -648,21 +706,19 @@ class Integration(unittest.TestCase):
         self.expect_no_new_messages(1)
 
     def test_save_warns_once_about_claude_panes_without_a_session_id(self):
-        self.load_plugin()
-        self.attach()
-        self.expect_message("loaded")
+        shown = self.load_with_client()
         self.write_snapshot()
         self.script("claude-tmux-resurrect-save", self.snapshot)
         [message] = self.expect_message("no session ID recorded for Claude")
         self.assertIn("in work:0.0;", message)
         self.write_snapshot()
         self.script("claude-tmux-resurrect-save", self.snapshot)
-        self.expect_no_new_messages(2)
+        self.expect_no_new_messages(shown + 1)
         self.hook("SessionStart")
         self.write_snapshot()
         self.script("claude-tmux-resurrect-save", self.snapshot)
         self.assertEqual(self.global_option("@claude-tmux-resurrect-unrecorded"), "")
-        self.expect_no_new_messages(2)
+        self.expect_no_new_messages(shown + 1)
 
     def test_restore_reports_sessions_it_cannot_resume(self):
         self.save()
@@ -677,43 +733,61 @@ class Integration(unittest.TestCase):
         )
 
     def test_session_start_reports_a_plugin_copy_with_another_version(self):
-        self.load_plugin()
-        self.attach()
-        self.expect_message("loaded")
+        shown = self.load_with_client()
         payload = json.dumps({"hook_event_name": "SessionStart", "session_id": ID})
-        manifest = json.loads((PLUGIN_ROOT / ".claude-plugin/plugin.json").read_text())
+        manifest = json.loads(
+            (CLAUDE_PLUGIN / ".claude-plugin/plugin.json").read_text()
+        )
+        copies = {}
         for name, version in [
-            ("same version", manifest["version"]),
-            ("older", "0.0.1"),
+            ("same version", VERSION),
+            ("listed", "0.0.1"),
+            ("installed", "0.0.2"),
         ]:
-            copy = self.base / name
-            self.copy_plugin(copy)
-            (copy / ".claude-plugin/plugin.json").write_text(
+            copies[name] = self.base / name
+            self.copy_plugin(copies[name])
+            (copies[name] / ".claude-plugin/plugin.json").write_text(
                 json.dumps(dict(manifest, version=version))
             )
+
+        def start(name, **env):
             self.run_command(
-                [str(copy / "bin/claude-tmux-resurrect-hook")], data=payload
+                [str(copies[name] / "bin/claude-tmux-resurrect-hook")],
+                data=payload,
+                env=dict(self.env, **env),
             )
+
+        start("same version")
+        # An earlier copy that a pane still lists in CLAUDE_CODE_PLUGIN_DIRS.
+        start("listed", CLAUDE_CODE_PLUGIN_DIRS=str(copies["listed"]))
         [message] = self.expect_message("loaded plugin version 0.0.1")
-        self.assertIn(f"but tmux runs {manifest['version']};", message)
-        self.run_command([str(copy / "bin/claude-tmux-resurrect-hook")], data=payload)
-        self.expect_no_new_messages(2)
+        self.assertIn(f"but tmux runs {VERSION}; start Claude in a new pane", message)
+        start("listed", CLAUDE_CODE_PLUGIN_DIRS=str(copies["listed"]))
+        self.expect_no_new_messages(shown + 1)
+        # A Claude plugin installed separately, as with the Nix packages.
+        start("installed")
+        [message] = self.expect_message("loaded plugin version 0.0.2")
+        self.assertIn("install the same version of both plugins", message)
         self.assertEqual(self.option("@claude_session_id"), ID)
 
-    def fake_claude(self, version="2.1.300", loads=True):
-        # Answers the two commands the check runs.
+    def fake_claude(self, version="2.1.300", plugins=None):
+        # Answers the two commands the check runs. Without PLUGINS, it loads
+        # each directory in CLAUDE_CODE_PLUGIN_DIRS as tmux-resurrect@inline.
         directory = self.base / "fake claude"
         directory.mkdir(exist_ok=True)
         script = directory / "claude"
         script.write_text(
             f"#!{PYTHON}\n"
             "import json, os, sys\n"
+            f"plugins = {plugins!r}\n"
             "if sys.argv[1:] == ['--version']:\n"
             f"    print({version!r} + ' (Claude Code)')\n"
             "elif sys.argv[1:] == ['plugin', 'list', '--json']:\n"
-            "    dirs = os.environ.get('CLAUDE_CODE_PLUGIN_DIRS', '').split(':')\n"
-            "    print(json.dumps([{'id': 'tmux-resurrect@inline', 'enabled': True,\n"
-            f"        'installPath': d}} for d in dirs if d and {loads!r}]))\n"
+            "    if plugins is None:\n"
+            "        dirs = os.environ.get('CLAUDE_CODE_PLUGIN_DIRS', '').split(':')\n"
+            "        plugins = [{'id': 'tmux-resurrect@inline', 'enabled': True,\n"
+            "                    'installPath': d} for d in dirs if d]\n"
+            "    print(json.dumps(plugins))\n"
             "else:\n"
             "    sys.exit(2)\n"
         )
@@ -721,8 +795,19 @@ class Integration(unittest.TestCase):
         return dict(
             self.env,
             PATH=f"{directory}:{BIN}:{os.environ['PATH']}",
-            CLAUDE_CODE_PLUGIN_DIRS=str(PLUGIN_ROOT),
+            CLAUDE_CODE_PLUGIN_DIRS=str(TMUX_PLUGIN),
         )
+
+    def installed(self, version=VERSION):
+        # A separately installed Claude plugin, as Home Manager links it.
+        return [
+            {
+                "id": "tmux-resurrect@skills-dir",
+                "version": version,
+                "enabled": True,
+                "installPath": str(CLAUDE_PLUGIN),
+            }
+        ]
 
     def check(self, env, *args):
         return self.script("claude-tmux-resurrect-check", *args, env=env, check=False)
@@ -730,11 +815,15 @@ class Integration(unittest.TestCase):
     def test_check_reports_a_working_setup(self):
         self.tmux("set", "-g", "@resurrect-save-script-path", "/resurrect/save.sh")
         self.load_plugin()
-        result = self.check(self.fake_claude())
+        if SEPARATE:
+            env, loaded = self.fake_claude(plugins=self.installed()), "skills-dir"
+        else:
+            env, loaded = self.fake_claude(), "inline"
+        result = self.check(env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("problem  ", result.stdout)
         self.assertIn(
-            "Claude Code loads the plugin as tmux-resurrect@inline", result.stdout
+            f"Claude Code loads the plugin as tmux-resurrect@{loaded}", result.stdout
         )
         self.assertTrue(result.stdout.endswith("No problems found.\n"))
 
@@ -746,17 +835,36 @@ class Integration(unittest.TestCase):
 
         self.load_plugin()
         self.tmux("set", "-g", "@resurrect-hook-post-save-layout", "true")
-        env = self.fake_claude(version="2.1.200", loads=False)
+        env = self.fake_claude(version="2.1.200", plugins=[])
         env.pop("CLAUDE_CODE_PLUGIN_DIRS")
         result = self.check(env)
         self.assertEqual(result.returncode, 1)
-        for text in [
-            "@resurrect-hook-post-save-layout was replaced",
-            "this shell's CLAUDE_CODE_PLUGIN_DIRS doesn't list the plugin",
-            "Claude Code 2.1.200 is older than 2.1.280",
-            "Claude Code doesn't load the plugin",
-        ]:
+        expected = ["@resurrect-hook-post-save-layout was replaced"]
+        if SEPARATE:
+            expected.append("Claude Code doesn't load the tmux-resurrect plugin")
+        else:
+            expected += [
+                "this shell's CLAUDE_CODE_PLUGIN_DIRS doesn't list the plugin",
+                "Claude Code 2.1.200 is older than 2.1.280",
+                "Claude Code doesn't load the plugin from",
+            ]
+        for text in expected:
             self.assertIn(text, result.stdout)
+
+    def test_check_compares_a_separately_installed_claude_plugin(self):
+        self.tmux("set", "-g", "@resurrect-save-script-path", "/resurrect/save.sh")
+        copy = self.base / "tmux plugin"
+        self.copy_plugin(copy)
+        shutil.rmtree(copy / "hooks")
+        self.load_plugin(copy / "claude-tmux-resurrect.tmux")
+        result = self.check(self.fake_claude(plugins=self.installed()))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("CLAUDE_CODE_PLUGIN_DIRS", result.stdout)
+        result = self.check(self.fake_claude(plugins=self.installed("0.0.1")))
+        self.assertIn(
+            f"loads tmux-resurrect@skills-dir 0.0.1, but tmux runs {VERSION}",
+            result.stdout,
+        )
 
     def test_check_compares_this_pane_with_a_claude_session(self):
         self.load_plugin()
@@ -1186,10 +1294,18 @@ class Integration(unittest.TestCase):
     @unittest.skipUnless(CLAUDE, "CLAUDE_BINARY is supplied by the claude flake check")
     def test_real_claude_records_and_clears_its_session_on_a_new_pane(self):
         self.load_plugin()
+        config = self.home / "claude config"
+        listed = {"CLAUDE_CODE_PLUGIN_DIRS": str(TMUX_PLUGIN)}
+        if SEPARATE:
+            # Install the Claude plugin as Home Manager's
+            # programs.claude-code.plugins does.
+            (config / "skills").mkdir(parents=True)
+            (config / "skills/tmux-resurrect").symlink_to(CLAUDE_PLUGIN)
+            listed = {}
         # Requests go to a closed local port, so nothing leaves the machine;
         # session hooks run before the first request fails.
         for name, value in {
-            "CLAUDE_CONFIG_DIR": str(self.home / "claude config"),
+            "CLAUDE_CONFIG_DIR": str(config),
             "ANTHROPIC_API_KEY": "sk-ant-test-not-a-key",
             "ANTHROPIC_BASE_URL": "http://127.0.0.1:9",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
@@ -1214,8 +1330,8 @@ class Integration(unittest.TestCase):
             env=dict(
                 self.env,
                 PATH=f"{Path(CLAUDE).parent}:{BIN}:{os.environ['PATH']}",
-                CLAUDE_CODE_PLUGIN_DIRS=str(PLUGIN_ROOT),
-                CLAUDE_CONFIG_DIR=str(self.home / "claude config"),
+                CLAUDE_CONFIG_DIR=str(config),
+                **listed,
             ),
         )
         self.assertIn(
@@ -1227,7 +1343,7 @@ class Integration(unittest.TestCase):
         wait_until(lambda: not recorded(), "Claude did not clear its session", 30)
 
     @unittest.skipUnless(TPM and RESURRECT, "TPM_SOURCE and RESURRECT_SOURCE are set")
-    @unittest.skipIf(PLUGIN_ROOT != ROOT, "TPM installs from a Git repository")
+    @unittest.skipIf(TMUX_PLUGIN != ROOT, "TPM installs from a Git repository")
     @unittest.skipIf(system_plugins(), "TPM also reads @plugin lines in /etc/tmux.conf")
     def test_tpm_installs_updates_and_cleans_the_readme_configuration(self):
         plugins = self.home / ".tmux/plugins"

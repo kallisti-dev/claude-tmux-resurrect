@@ -8,22 +8,27 @@ session ID and prepare the command needed to resume it.
 
 The repository is both a tmux plugin and a Claude Code plugin. tmux runs
 `claude-tmux-resurrect.tmux`, through TPM or `run-shell`, which runs setup. Setup
-registers the resurrect and tmux callbacks and adds the plugin directory to
+registers the resurrect and tmux callbacks. When the plugin directory also holds
+`hooks/hooks.json`, as a TPM clone does, setup adds the directory to
 `CLAUDE_CODE_PLUGIN_DIRS` in tmux's global environment. Claude Code loads each
 directory listed in that variable in place, as a session-only plugin, so Claude
 sessions started in new panes run `hooks/hooks.json` from the same directory as
-the tmux callbacks. The two halves therefore always come from the same files,
-and the tmux options under [transient tmux state](#transient-tmux-state) are
-their only interface.
+the tmux callbacks, and the two halves come from the same files.
+
+The Nix packages split the halves instead. The tmux plugin package has no
+hooks, so setup leaves the variable alone, and the Claude plugin package is
+installed where Claude Code loads plugins, such as its `skills` directory.
+Either way, the tmux options under [transient tmux state](#transient-tmux-state)
+are the only interface between the halves.
 
 Setup records the directory it listed and replaces that entry when the plugin
 moves, keeping entries that something else added. A process keeps the
 environment it started with, so Claude sessions in panes opened before the
 plugin loaded do not load its hooks. For the same reason, a pane opened before
-the plugin moved, such as after a Nix rebuild replaced its store path, starts
-Claude with the earlier copy. The SessionStart hook compares its own manifest
-version with the one setup recorded, and reports a difference once per pair of
-versions.
+the plugin moved starts Claude with the earlier copy. The SessionStart hook
+compares its own manifest version with the one setup recorded, and reports a
+difference once per pair of versions; this also covers separately installed
+packages of different versions.
 
 ## Save and restore
 
