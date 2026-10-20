@@ -37,6 +37,18 @@ In Claude Code, `/plugin` lists the hook's plugin as `tmux-resurrect@inline`,
 or as `tmux-resurrect@skills-dir` for the Nix Claude plugin installed with Home
 Manager. Start or resume Claude where it loads the plugin, then save again.
 
+OpenCode records a session only once it has had a prompt, and a save skips a
+recorded OpenCode session unless the pane is still running OpenCode. With TPM,
+OpenCode loads the plugin when the pane's `OPENCODE_CONFIG_CONTENT` lists
+`opencode/tmux-agent-resurrect.js` in the plugin directory:
+
+```sh
+printenv OPENCODE_CONFIG_CONTENT
+```
+
+With the Nix packages, OpenCode's `opencode.json` must list that file in its
+`plugin` list.
+
 ## No resume after attach
 
 Inspect the pending command and restore gate:

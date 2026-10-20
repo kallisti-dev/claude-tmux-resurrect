@@ -24,5 +24,5 @@
       },
 }:
 {
-  inherit (pkgs.callPackage ./packages.nix { }) tmux-plugin claude-plugin;
+  inherit (pkgs.callPackage ./packages.nix { }) tmux-plugin claude-plugin opencode-plugin;
 }

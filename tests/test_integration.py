@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # CLAUDE_CODE_PLUGIN_DIRS.
 TMUX_PLUGIN = Path(os.environ.get("TEST_TMUX_PLUGIN", ROOT))
 CLAUDE_PLUGIN = Path(os.environ.get("TEST_CLAUDE_PLUGIN", ROOT))
+OPENCODE_PLUGIN = Path(os.environ.get("TEST_OPENCODE_PLUGIN", ROOT))
 SEPARATE = TMUX_PLUGIN != CLAUDE_PLUGIN
 PLUGIN_FILES = [
     "tmux-agent-resurrect.tmux",
@@ -24,6 +25,7 @@ PLUGIN_FILES = [
     "hooks",
     "skills/check",
     ".claude-plugin",
+    "opencode",
 ]
 BIN = TMUX_PLUGIN / "bin"
 ENTRY = TMUX_PLUGIN / "tmux-agent-resurrect.tmux"
@@ -34,6 +36,7 @@ GIT = shutil.which("git")
 RESURRECT = os.environ.get("RESURRECT_SOURCE")
 TPM = os.environ.get("TPM_SOURCE")
 CLAUDE = os.environ.get("CLAUDE_BINARY")
+OPENCODE = os.environ.get("OPENCODE_BINARY")
 VERSION = json.loads((ROOT / ".claude-plugin/plugin.json").read_text())["version"]
 ID = "11111111-2222-3333-4444-555555555555"
 
@@ -81,17 +84,20 @@ class Integration(unittest.TestCase):
             "TMPDIR": str(self.base),
             "CLAUDE_TEST_LOG": str(self.log),
         }
-        # The only executable named claude available before the inherited PATH
-        # is this stub. It logs argv/cwd and holds the pane until teardown.
-        stub = self.stubdir / "claude"
-        stub.write_text(
-            f"#!{PYTHON}\n"
-            "import json, os, sys, time\n"
-            "with open(os.environ['CLAUDE_TEST_LOG'], 'a') as f:\n"
-            "    f.write(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd()}) + '\\n')\n"
-            "time.sleep(120)\n"
-        )
-        stub.chmod(0o755)
+        # The only executables named claude and opencode available before the
+        # inherited PATH are these stubs. They log argv/cwd, with the program
+        # for opencode, and hold the pane until teardown.
+        for program, extra in [("claude", ""), ("opencode", ", 'program': 'opencode'")]:
+            stub = self.stubdir / program
+            stub.write_text(
+                f"#!{PYTHON}\n"
+                "import json, os, sys, time\n"
+                "with open(os.environ['CLAUDE_TEST_LOG'], 'a') as f:\n"
+                "    f.write(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd()"
+                f"{extra}}}) + '\\n')\n"
+                "time.sleep(120)\n"
+            )
+            stub.chmod(0o755)
         config = self.base / "tmux.conf"
         config.write_text(
             f"set -g default-shell {shlex.quote(BASH)}\n"
@@ -153,10 +159,11 @@ class Integration(unittest.TestCase):
         return self.run_command([TMUX, "-S", str(self.socket), *args], **kwargs)
 
     def script(self, name, *args, data=None, env=None, check=True):
-        # Claude runs the hook from the Claude plugin; tmux runs the rest.
-        bin = (
-            CLAUDE_PLUGIN / "bin" if name == "tmux-agent-resurrect-claude-hook" else BIN
-        )
+        # Each agent runs its recorder from its own plugin; tmux runs the rest.
+        bin = {
+            "tmux-agent-resurrect-claude-hook": CLAUDE_PLUGIN / "bin",
+            "tmux-agent-resurrect-record": OPENCODE_PLUGIN / "bin",
+        }.get(name, BIN)
         return self.run_command(
             [str(bin / name), *map(str, args)], data=data, env=env, check=check
         )
@@ -294,6 +301,13 @@ class Integration(unittest.TestCase):
         _, separator, value = result.stdout.rstrip("\n").partition("=")
         return value if result.returncode == 0 and separator else None
 
+    def opencode_config(self):
+        result = self.tmux(
+            "show-environment", "-g", "OPENCODE_CONFIG_CONTENT", check=False
+        )
+        _, separator, value = result.stdout.rstrip("\n").partition("=")
+        return json.loads(value) if result.returncode == 0 and separator else None
+
     def native_hooks(self, event):
         return self.tmux("show-hooks", "-g", event).stdout.splitlines()
 
@@ -364,7 +378,7 @@ class Integration(unittest.TestCase):
         # Copies both halves into one directory, as in a TPM clone. A Nix
         # wrapper runs its wrapped script from the store, so copy the wrapped
         # script itself; the copy then runs from where it is.
-        for root in dict.fromkeys([TMUX_PLUGIN, CLAUDE_PLUGIN]):
+        for root in dict.fromkeys([TMUX_PLUGIN, CLAUDE_PLUGIN, OPENCODE_PLUGIN]):
             for name in PLUGIN_FILES:
                 source = root / name
                 if not source.exists():
@@ -640,12 +654,58 @@ class Integration(unittest.TestCase):
         self.assertEqual(self.global_option("@agent-resurrect-dir"), str(without))
         self.assertEqual(self.global_option("@agent-resurrect-version"), VERSION)
 
+    def test_new_panes_load_the_opencode_plugin_beside_other_configuration(self):
+        user = {"autoupdate": False, "plugin": ["/user/plugin.js"]}
+        self.tmux("set-environment", "-g", "OPENCODE_CONFIG_CONTENT", json.dumps(user))
+        first, second = self.base / "first copy", self.base / "second copy"
+        for directory in [first, second]:
+            self.copy_plugin(directory)
+            entry = directory / "tmux-agent-resurrect.tmux"
+            self.load_plugin(entry)
+            self.load_plugin(entry)
+            plugin = str(directory / "opencode/tmux-agent-resurrect.js")
+            self.assertEqual(
+                self.opencode_config(), dict(user, plugin=[*user["plugin"], plugin])
+            )
+        # A copy without the OpenCode plugin, as when switching to the Nix
+        # packages, removes the earlier entry.
+        shutil.rmtree(first / "opencode")
+        self.load_plugin(first / "tmux-agent-resurrect.tmux")
+        self.assertEqual(self.opencode_config(), user)
+        self.load_plugin(second / "tmux-agent-resurrect.tmux")
+        self.run_command([str(second / "bin/tmux-agent-resurrect-setup"), "--remove"])
+        self.assertEqual(self.opencode_config(), user)
+
+    def test_remove_unsets_an_opencode_configuration_with_only_this_plugin(self):
+        copy = self.base / "plugin copy"
+        self.copy_plugin(copy)
+        self.load_plugin(copy / "tmux-agent-resurrect.tmux")
+        plugin = str(copy / "opencode/tmux-agent-resurrect.js")
+        self.assertEqual(self.opencode_config(), {"plugin": [plugin]})
+        self.run_command([str(copy / "bin/tmux-agent-resurrect-setup"), "--remove"])
+        self.assertIsNone(self.opencode_config())
+
+    def test_opencode_configuration_that_is_not_a_plugin_object_is_left_alone(self):
+        copy = self.base / "plugin copy"
+        self.copy_plugin(copy)
+        for content in ["not json", "[]", '{"plugin": "one.js"}']:
+            with self.subTest(content=content):
+                self.tmux("set-environment", "-g", "OPENCODE_CONFIG_CONTENT", content)
+                result = self.run_command(
+                    [str(copy / "bin/tmux-agent-resurrect-setup")]
+                )
+                self.assertIn("OPENCODE_CONFIG_CONTENT", result.stderr)
+                value = self.tmux("show-environment", "-g", "OPENCODE_CONFIG_CONTENT")
+                self.assertEqual(value.stdout, f"OPENCODE_CONFIG_CONTENT={content}\n")
+
     @unittest.skipUnless(SEPARATE, "checks the packaged tmux plugin")
     def test_packaged_tmux_plugin_leaves_the_plugin_list_alone(self):
         self.assertFalse((TMUX_PLUGIN / "hooks").exists())
+        self.assertFalse((TMUX_PLUGIN / "opencode").exists())
         self.attach()
         self.load_plugin()
         self.assertIsNone(self.plugin_dirs())
+        self.assertIsNone(self.opencode_config())
         self.assertEqual(self.global_option("@agent-resurrect-dir"), str(TMUX_PLUGIN))
         self.assertEqual(self.global_option("@agent-resurrect-version"), VERSION)
         self.expect_no_new_messages(0)
@@ -697,7 +757,7 @@ class Integration(unittest.TestCase):
         notices = "@agent-resurrect-notices"
         wait_until(lambda: self.global_option(notices), "notice was not kept")
         self.attach()
-        [message] = self.expect_message("start Claude in a new pane")
+        [message] = self.expect_message("OpenCode in a new pane")
         self.assertTrue(message.startswith("tmux-agent-resurrect: loaded"))
         self.assertEqual(self.global_option(notices), "")
         self.load_plugin()
@@ -949,6 +1009,86 @@ class Integration(unittest.TestCase):
     def test_hook_outside_tmux_is_noop(self):
         env = {k: v for k, v in self.env.items() if k not in {"TMUX", "TMUX_PANE"}}
         self.script("tmux-agent-resurrect-claude-hook", data="not json", env=env)
+
+    def record(self, *args, **kwargs):
+        return self.script("tmux-agent-resurrect-record", *args, **kwargs)
+
+    def test_recorder_records_and_ends_an_agent_session(self):
+        self.record("start", "opencode", "ses_1", self.cwd)
+        self.assertEqual(self.option("@agent-resurrect-session"), "opencode ses_1")
+        self.assertEqual(self.option("@agent-resurrect-cwd"), str(self.cwd))
+        self.record("end", "opencode", "ses_other")
+        self.assertEqual(self.option("@agent-resurrect-session"), "opencode ses_1")
+        self.record("end", "opencode", "ses_1")
+        self.assertEqual(self.option("@agent-resurrect-session"), "")
+        self.assertEqual(self.option("@agent-resurrect-cwd"), "")
+        for args in [
+            ["start", "unknown", "ses_1"],
+            ["start", "opencode", "$(touch bad)"],
+            ["start", "opencode", "ses_1", "relative"],
+            ["stop", "opencode", "ses_1"],
+        ]:
+            with self.subTest(args=args):
+                result = self.record(*args, check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("tmux-agent-resurrect:", result.stderr)
+                self.assertEqual(self.option("@agent-resurrect-session"), "")
+        env = {k: v for k, v in self.env.items() if k not in {"TMUX", "TMUX_PANE"}}
+        self.record("start", "opencode", "ses_1", env=env)
+
+    def test_opencode_session_is_saved_and_resumed(self):
+        directory = self.home / "opencode project"
+        directory.mkdir()
+        self.record("start", "opencode", "ses_1", directory)
+        self.write_snapshot(command="opencode", full="opencode")
+        self.script("tmux-agent-resurrect-save", self.snapshot)
+        [record] = self.records()
+        self.assertEqual(
+            [record[key] for key in ["agent", "session_id", "cwd", "worktree"]],
+            ["opencode", "ses_1", str(directory), ""],
+        )
+        self.assertEqual(self.snapshot.read_text().splitlines()[0].split("\t")[10], ":")
+        self.record("end", "opencode", "ses_1")
+        self.attach()
+        self.script("tmux-agent-resurrect-post-restore", self.snapshot)
+        self.assertEqual(
+            self.expect_launches(1)[0],
+            {
+                "argv": ["-s", "ses_1"],
+                "cwd": str(directory.resolve()),
+                "program": "opencode",
+            },
+        )
+        # OpenCode reports a reopened session only at its next prompt, so the
+        # dispatcher records it.
+        self.assertEqual(self.option("@agent-resurrect-session"), "opencode ses_1")
+        self.assertEqual(self.option("@agent-resurrect-cwd"), str(directory))
+
+    def test_recorded_opencode_session_is_saved_only_while_it_runs(self):
+        self.record("start", "opencode", "ses_1", self.cwd)
+        self.write_snapshot(command="bash", full="bash")
+        self.script("tmux-agent-resurrect-save", self.snapshot)
+        self.assertEqual(self.records(), [])
+        # macOS reports at most 15 characters of a process name.
+        for command in [
+            "opencode",
+            ".opencode-wrapp",
+            ".opencode-wrapped",
+            "opencode.exe",
+        ]:
+            with self.subTest(command=command):
+                self.write_snapshot(command=command, full=command)
+                self.script("tmux-agent-resurrect-save", self.snapshot)
+                self.assertEqual(
+                    [record["session_id"] for record in self.records()], ["ses_1"]
+                )
+
+    def test_save_does_not_warn_about_opencode_before_its_first_prompt(self):
+        shown = self.load_with_client()
+        self.write_snapshot(command="opencode", full="opencode")
+        self.script("tmux-agent-resurrect-save", self.snapshot)
+        self.assertEqual(self.records(), [])
+        self.expect_no_new_messages(shown)
 
     def test_save_changed_cwd_suppresses_generic_restart(self):
         changed = self.home / "changed directory"
@@ -1296,7 +1436,7 @@ class Integration(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("required command not found on PATH: jq", result.stderr)
 
-    @unittest.skipUnless(CLAUDE, "CLAUDE_BINARY is supplied by the claude flake check")
+    @unittest.skipUnless(CLAUDE, "CLAUDE_BINARY is supplied by the agents check")
     def test_real_claude_records_and_clears_its_session_on_a_new_pane(self):
         self.load_plugin()
         config = self.home / "claude config"
@@ -1346,6 +1486,78 @@ class Integration(unittest.TestCase):
         # Interrupting Claude ends its session while the pane stays open.
         self.tmux("send-keys", "-t", pane, "C-c")
         wait_until(lambda: not recorded(), "Claude did not clear its session", 30)
+
+    @unittest.skipUnless(OPENCODE, "OPENCODE_BINARY is supplied by the agents check")
+    def test_real_opencode_records_and_clears_its_session(self):
+        self.load_plugin()
+        config = self.home / "opencode config"
+        (config / "opencode").mkdir(parents=True)
+        # A provider on a closed local port, so nothing leaves the machine; the
+        # session exists before the first request fails.
+        settings = {
+            "autoupdate": False,
+            "share": "disabled",
+            "enabled_providers": ["fake"],
+            "provider": {
+                "fake": {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "name": "Fake provider",
+                    "options": {"baseURL": "http://127.0.0.1:9/v1", "apiKey": "x"},
+                    "models": {"fake-model": {"name": "Fake model"}},
+                }
+            },
+            "model": "fake/fake-model",
+            "small_model": "fake/fake-model",
+        }
+        if SEPARATE:
+            # Install the OpenCode plugin as Home Manager's
+            # programs.opencode.settings.plugin does.
+            plugin = OPENCODE_PLUGIN / "opencode/tmux-agent-resurrect.js"
+            settings["plugin"] = [str(plugin)]
+        (config / "opencode/opencode.json").write_text(json.dumps(settings))
+        # OpenCode skips installing its plugin package into a configuration
+        # directory it cannot write, which needs the network.
+        (config / "opencode").chmod(0o555)
+        self.addCleanup((config / "opencode").chmod, 0o755)
+        for name, value in {
+            "XDG_CONFIG_HOME": str(config),
+            "XDG_DATA_HOME": str(self.home / "opencode data"),
+            "XDG_CACHE_HOME": str(self.home / "opencode cache"),
+            "XDG_STATE_HOME": str(self.home / "opencode state"),
+            "OPENCODE_DISABLE_MODELS_FETCH": "1",
+            "OPENCODE_DISABLE_AUTOUPDATE": "1",
+        }.items():
+            self.tmux("set-environment", "-g", name, value)
+        command = f"{shlex.quote(OPENCODE)}; sleep 60"
+        self.tmux("new-window", "-d", "-n", "opencode", "-c", str(self.cwd), command)
+        pane = self.tmux("display", "-p", "-t", "work:opencode", "#{pane_id}")
+        pane = pane.stdout.strip()
+
+        def recorded():
+            result = self.tmux(
+                "show", "-pqv", "-t", pane, "@agent-resurrect-session", check=False
+            )
+            return result.stdout.strip()
+
+        # OpenCode reports a session at its first prompt. Prompt again until it
+        # does, in case the first one comes before the plugin has loaded.
+        for _ in range(6):
+            self.tmux("send-keys", "-t", pane, "-l", "hello")
+            self.tmux("send-keys", "-t", pane, "Enter")
+            try:
+                session = wait_until(recorded, "OpenCode did not record", 10)
+                break
+            except AssertionError:
+                continue
+        else:
+            self.fail("OpenCode did not record its session")
+        self.assertRegex(session, r"^opencode ses_[0-9A-Za-z]+$")
+        cwd = self.tmux("show", "-pqv", "-t", pane, "@agent-resurrect-cwd").stdout
+        self.assertTrue(cwd.strip().startswith("/"), cwd)
+        self.assertEqual(Path(cwd.strip()).resolve(), self.cwd.resolve())
+        # Interrupting OpenCode at an empty prompt exits it cleanly.
+        self.tmux("send-keys", "-t", pane, "C-c")
+        wait_until(lambda: not recorded(), "OpenCode did not clear its session", 30)
 
     @unittest.skipUnless(TPM and RESURRECT, "TPM_SOURCE and RESURRECT_SOURCE are set")
     @unittest.skipIf(TMUX_PLUGIN != ROOT, "TPM installs from a Git repository")

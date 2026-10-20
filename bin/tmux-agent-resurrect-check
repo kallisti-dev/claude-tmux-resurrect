@@ -83,6 +83,16 @@ else
       problem "this shell's CLAUDE_CODE_PLUGIN_DIRS doesn't list the plugin, so Claude started here won't record its session; use a new pane"
     fi
   fi
+  # Likewise for the OpenCode plugin, listed in OPENCODE_CONFIG_CONTENT.
+  if [[ -f $dir/opencode/tmux-agent-resurrect.js ]]; then
+    content=$(tmux show-environment -g OPENCODE_CONFIG_CONTENT 2>/dev/null || true)
+    if jq -e --arg plugin "$dir/opencode/tmux-agent-resurrect.js" 'any(.plugin[]?; . == $plugin)' \
+      >/dev/null 2>&1 <<<"${content#OPENCODE_CONFIG_CONTENT=}"; then
+      ok 'new panes load the OpenCode plugin through OPENCODE_CONFIG_CONTENT'
+    else
+      problem "tmux's global OPENCODE_CONFIG_CONTENT doesn't list the OpenCode plugin; reload the tmux configuration"
+    fi
+  fi
 fi
 
 if ! command -v claude >/dev/null 2>&1; then
@@ -119,7 +129,12 @@ fi
 unrecorded=()
 while IFS=$'\t' read -r pane where command; do
   running=$(agent_of_command "$command")
-  [[ -n $running && -z $(pane_option "$pane" @agent-resurrect-session) ]] || continue
+  # An agent that reports late has no session to resume before its first
+  # prompt.
+  if [[ -z $running ]] || reports_late "$running"; then
+    continue
+  fi
+  [[ -z $(pane_option "$pane" @agent-resurrect-session) ]] || continue
   unrecorded+=("$(agent_label "$running") in $where")
 done < <(tmux list-panes -a -F $'#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}')
 if [[ ${#unrecorded[@]} == 0 ]]; then

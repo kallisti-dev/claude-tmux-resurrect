@@ -6,9 +6,17 @@ The flake supports Apple Silicon macOS and Linux (`aarch64-darwin`,
 `aarch64-linux`, and `x86_64-linux`). Its pinned nixpkgs does not support Intel
 macOS; the TPM installation is untested there.
 
-One foreground Claude conversation per pane is supported. Fish, Nushell, native
-Windows, and remote Claude processes are unsupported. Linux under WSL2 is
+One foreground agent conversation per pane is supported. Fish, Nushell, native
+Windows, and remote agent processes are unsupported. Linux under WSL2 is
 untested.
+
+OpenCode support covers the 1.x terminal interface; the tests use OpenCode
+1.18 and the plugin was also tried with 1.19. The plugin relies on the
+interface running plugins in a worker thread, which tells it apart from
+`opencode run`. OpenCode 2, which keeps sessions in a shared background
+service, is unsupported. OpenCode reports a session at its first prompt, so a
+session switched to inside OpenCode is saved as the previous one until its next
+prompt.
 
 With a TPM installation, Claude Code loads the plugin's hooks through
 `CLAUDE_CODE_PLUGIN_DIRS`, which requires version 2.1.280 or later; earlier
@@ -22,14 +30,15 @@ Code uses.
 
 ## Testing limits
 
-Most tests stub Claude. They verify exact argv, cwd, hook behavior, tmux
-lifecycle, and interoperability with upstream resurrect and TPM. One test runs
-the Claude Code binary from the pinned nixpkgs, without network access, to check
-that a session started in a new pane loads the plugin and records and clears its
-session ID: through `CLAUDE_CODE_PLUGIN_DIRS` from the source, and from the
-`skills` directory for the Nix packages. The tests do not cover Claude
-authentication, transcript compatibility across versions, or an actual
-conversation resumption.
+Most tests stub the agents. They verify exact argv, cwd, hook behavior, tmux
+lifecycle, and interoperability with upstream resurrect and TPM. Two tests run
+the Claude Code and OpenCode binaries from the pinned nixpkgs, without network
+access, to check that a session started in a new pane loads the plugin and
+records and clears its session ID. Claude Code loads it through
+`CLAUDE_CODE_PLUGIN_DIRS` from the source and from the `skills` directory for
+the Nix packages; OpenCode through `OPENCODE_CONFIG_CONTENT` and its
+configuration file. The tests do not cover authentication, session file
+compatibility across versions, or an actual conversation resumption.
 
 The transcript directory layout and top-level `cwd` fields are an integration
 assumption and can change with Claude versions. Worktree inference covers the

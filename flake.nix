@@ -56,12 +56,17 @@
             ruff
           ];
           packages = {
-            inherit (pkgs.callPackage ./packages.nix { }) tmux-plugin claude-plugin;
+            inherit (pkgs.callPackage ./packages.nix { })
+              tmux-plugin
+              claude-plugin
+              opencode-plugin
+              ;
           };
-          # The tests use these in place of the source, which holds both halves.
+          # The tests use these in place of the source, which holds every plugin.
           testPlugins = ''
             export TEST_TMUX_PLUGIN=${packages.tmux-plugin}/share/tmux-plugins/tmux-agent-resurrect
             export TEST_CLAUDE_PLUGIN=${packages.claude-plugin}
+            export TEST_OPENCODE_PLUGIN=${packages.opencode-plugin}
           '';
           inherit
             (import nixpkgs {
@@ -108,10 +113,11 @@
               ${testPlugins}
               ${behavior}
             '';
-            # Claude Code fails to format numbers inside the Darwin sandbox,
-            # which nixpkgs also disables to build it there.
-            claude =
-              (check "claude" (runtime ++ testTools ++ [ claude-code ]) ''
+            # Tests with the real agents. Claude Code fails to format numbers
+            # inside the Darwin sandbox, which nixpkgs also disables to build
+            # it there.
+            agents =
+              (check "agents" (runtime ++ testTools ++ [ claude-code ]) ''
                 export HOME="$TMPDIR/home" CLAUDE_CONFIG_DIR="$TMPDIR/claude"
                 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
                 mkdir -p "$HOME"
@@ -119,9 +125,10 @@
                 claude plugin validate --strict ${packages.claude-plugin}
                 patchShebangs --build tmux-agent-resurrect.tmux bin
                 export CLAUDE_BINARY=${pkgs.lib.getExe claude-code}
-                python3 -m unittest discover -s tests -v -f -k test_real_claude
+                export OPENCODE_BINARY=${pkgs.lib.getExe pkgs.opencode}
+                python3 -m unittest discover -s tests -v -f -k test_real_
                 ${testPlugins}
-                python3 -m unittest discover -s tests -v -f -k test_real_claude
+                python3 -m unittest discover -s tests -v -f -k test_real_
               '').overrideAttrs
                 { __noChroot = pkgs.stdenv.hostPlatform.isDarwin; };
             nonflake =

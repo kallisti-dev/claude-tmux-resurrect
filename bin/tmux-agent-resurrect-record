@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Record or clear an agent session on the calling tmux pane, for agent plugins
+# that report sessions without Claude Code's hook payload.
+# SPDX-License-Identifier: BSD-3-Clause
+set -euo pipefail
+# shellcheck source=lib/tmux-agent-resurrect.sh
+source "${BASH_SOURCE[0]%/*}/../lib/tmux-agent-resurrect.sh"
+usage='usage: tmux-agent-resurrect-record start AGENT SESSION_ID [DIRECTORY] | end AGENT SESSION_ID'
+
+# Agents also run outside tmux; that is a successful no-op.
+[[ -n ${TMUX_PANE:-} && -n ${TMUX:-} ]] || exit 0
+need tmux
+[[ $TMUX_PANE =~ ^%[0-9]+$ ]] || die 'TMUX_PANE is not a pane ID'
+[[ $# -ge 3 ]] || die "$usage"
+event=$1 agent=$2 id=$3
+[[ " $agents " == *" $agent "* ]] || die "unknown agent: $agent"
+valid_id "$id" || die "invalid session ID: $id"
+case $event in
+  start)
+    [[ $# -le 4 ]] || die "$usage"
+    [[ -z ${4:-} || $4 == /* ]] || die "the session directory must be absolute: $4"
+    # Save uses this directory for agents whose session files it doesn't read.
+    record_session "$TMUX_PANE" "$agent" "$id" "${4:-}"
+    ;;
+  end)
+    [[ $# == 3 ]] || die "$usage"
+    end_session "$TMUX_PANE" "$agent" "$id"
+    ;;
+  *) die "$usage" ;;
+esac

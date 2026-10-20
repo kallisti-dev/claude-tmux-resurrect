@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Register this integration alongside existing tmux and resurrect hooks, and
-# list the plugin in CLAUDE_CODE_PLUGIN_DIRS for Claude sessions in new panes.
+# list the agent plugins in tmux's global environment for agents started in
+# new panes.
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
 # shellcheck source=lib/tmux-agent-resurrect.sh
@@ -11,6 +12,7 @@ bin_dir=$(cd -- "${BASH_SOURCE[0]%/*}" && pwd)
 plugin_dir=${bin_dir%/bin}
 prefix=@agent-resurrect
 variable=CLAUDE_CODE_PLUGIN_DIRS
+opencode_plugin=opencode/tmux-agent-resurrect.js
 
 # Serialize reloads without clearing or rebuilding another plugin's hook array.
 tmux wait-for -L tmux-agent-resurrect-setup
@@ -18,11 +20,12 @@ trap 'tmux wait-for -U tmux-agent-resurrect-setup' EXIT
 
 option() { tmux show-options -gqv "$1"; }
 
-# Print tmux's global value of CLAUDE_CODE_PLUGIN_DIRS, if it has one.
-plugin_dirs() {
+# Usage: global_env NAME
+# Print tmux's global value of the environment variable NAME, if it has one.
+global_env() {
   local line
-  if line=$(tmux show-environment -g "$variable" 2>/dev/null) && [[ $line == "$variable="* ]]; then
-    printf '%s' "${line#"$variable="}"
+  if line=$(tmux show-environment -g "$1" 2>/dev/null) && [[ $line == "$1="* ]]; then
+    printf '%s' "${line#"$1="}"
   fi
 }
 
@@ -32,7 +35,7 @@ plugin_dirs() {
 # inherit the result; running processes keep the value they started with.
 update_plugin_dirs() {
   local remove=$1 add=${2:-} entry value='' entries=()
-  IFS=: read -ra entries <<<"$(plugin_dirs)"
+  IFS=: read -ra entries <<<"$(global_env "$variable")"
   for entry in ${entries[@]+"${entries[@]}"}; do
     [[ -n $entry && $entry != "$remove" && $entry != "$add" ]] || continue
     value+=${value:+:}$entry
@@ -42,6 +45,32 @@ update_plugin_dirs() {
     tmux set-environment -g "$variable" "$value"
   else
     tmux set-environment -gu "$variable"
+  fi
+}
+
+# Usage: update_opencode_config REMOVE [ADD]
+# Rewrite the plugin list in tmux's global OPENCODE_CONFIG_CONTENT without the
+# plugin file REMOVE, appending ADD if given, and keep the rest of that
+# configuration. OpenCode loads plugins listed there in addition to those in
+# its configuration files. Leave a value that is not a JSON object with a
+# plugin list alone.
+update_opencode_config() {
+  local remove=$1 add=${2:-} content updated
+  content=$(global_env OPENCODE_CONFIG_CONTENT)
+  [[ -n $content ]] || content='{}'
+  if ! updated=$(jq -ce --arg remove "$remove" --arg add "$add" '
+      if type != "object" or ((.plugin // []) | type) != "array" then error
+      else .plugin = ([(.plugin // [])[] | select(. != $remove and . != $add)]
+          + if $add == "" then [] else [$add] end)
+        | if .plugin == [] then del(.plugin) else . end
+      end' <<<"$content" 2>/dev/null); then
+    [[ -z $add ]] || notify "OPENCODE_CONFIG_CONTENT in tmux's global environment is not a JSON object with a plugin list, so OpenCode in new panes will not load the plugin"
+    return 0
+  fi
+  if [[ $updated == '{}' ]]; then
+    tmux set-environment -gu OPENCODE_CONFIG_CONTENT
+  else
+    tmux set-environment -g OPENCODE_CONFIG_CONTENT "$updated"
   fi
 }
 
@@ -154,7 +183,10 @@ if [[ ${1:-} == --remove ]]; then
     remove_event_hook "$event"
   done
   previous=$(option "$prefix-dir")
-  [[ -z $previous ]] || update_plugin_dirs "$previous"
+  if [[ -n $previous ]]; then
+    update_plugin_dirs "$previous"
+    update_opencode_config "$previous/$opencode_plugin"
+  fi
   tmux set-option -gu "$prefix-dir"
   tmux set-option -gu "$prefix-version"
 else
@@ -178,12 +210,19 @@ else
   register_event_hook client-session-changed "run-shell -b $(quote "$arm #{q:session_id}")"
   previous=$(option "$prefix-dir")
   [[ -z $previous && -z $listing ]] || update_plugin_dirs "$previous" "$listing"
+  # Likewise, a directory that holds the OpenCode plugin, such as a TPM clone,
+  # lists it for OpenCode; the Nix packages install it separately.
+  opencode_listing=''
+  [[ ! -f $plugin_dir/$opencode_plugin ]] || opencode_listing=$plugin_dir/$opencode_plugin
+  if [[ -n $previous || -n $opencode_listing ]]; then
+    update_opencode_config "${previous:+$previous/$opencode_plugin}" "$opencode_listing"
+  fi
   tmux set-option -g "$prefix-dir" "$plugin_dir"
   # The Claude hook compares its own version with this one.
   tmux set-option -g "$prefix-version" "$(plugin_version "$plugin_dir")"
   # Existing panes keep the environment they started with. When tmux starts,
   # the configuration loads before any pane exists.
-  if [[ -n $listing && -z $previous && -n $(tmux list-panes -a -F . 2>/dev/null) ]]; then
-    notify 'loaded; start Claude in a new pane so tmux-resurrect can resume it'
+  if [[ -n $listing$opencode_listing && -z $previous && -n $(tmux list-panes -a -F . 2>/dev/null) ]]; then
+    notify 'loaded; start Claude Code or OpenCode in a new pane so tmux-resurrect can resume it'
   fi
 fi

@@ -112,16 +112,24 @@ pane_option() { tmux show-options -pqv -t "$1" "$2"; }
 
 # The agents whose sessions are restored, as named in pane options and
 # snapshot records.
-agents='claude'
+agents='claude opencode'
 
 # Usage: agent_label AGENT
 # Print AGENT's name for messages.
 agent_label() {
   case $1 in
     claude) printf 'Claude' ;;
+    opencode) printf 'OpenCode' ;;
     *) printf '%s' "$1" ;;
   esac
 }
+
+# Usage: reports_late AGENT
+# Succeed if AGENT reports a session only once the user sends a prompt, and
+# may not report its end. OpenCode creates a session at the first prompt,
+# reopening one with -s reports nothing until the next prompt, and nothing
+# fires when it exits uncleanly.
+reports_late() { [[ $1 == opencode ]]; }
 
 # Usage: agent_of_command COMMAND
 # Print the agent that a pane's #{pane_current_command} shows is running, or
@@ -142,9 +150,16 @@ agent_of_command() {
 # tmux-agent-resurrect-claude-hook repeat this pattern in jq.
 valid_id() { [[ $1 =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$ ]]; }
 
-# Usage: record_session PANE AGENT ID
-# Record that PANE runs AGENT's session ID, replacing any pending resume.
+# Usage: record_session PANE AGENT ID [DIRECTORY]
+# Record that PANE runs AGENT's session ID, in DIRECTORY if given, replacing
+# any pending resume. The directory is set first, so a reader that sees the
+# session also sees its directory.
 record_session() {
+  if [[ -n ${4:-} ]]; then
+    tmux set-option -p -t "$1" @agent-resurrect-cwd "$4"
+  else
+    tmux set-option -pu -t "$1" @agent-resurrect-cwd
+  fi
   tmux set-option -p -t "$1" @agent-resurrect-session "$2 $3"
   tmux set-option -pu -t "$1" @agent-resurrect-resume-cmd
   tmux set-option -pu -t "$1" @agent-resurrect-resume-data
@@ -155,7 +170,7 @@ record_session() {
 # clears in one command, so a newer session that has started meanwhile stays.
 end_session() {
   tmux if-shell -F -t "$1" "#{==:#{@agent-resurrect-session},$2 $3}" \
-    "set-option -pu -t $1 @agent-resurrect-session"
+    "set-option -pu -t $1 @agent-resurrect-session ; set-option -pu -t $1 @agent-resurrect-cwd"
 }
 
 # Usage: quote STRING
@@ -249,7 +264,22 @@ resume_command() {
   agent=$(jq -r '.agent' <<<"$record")
   case $agent in
     claude) claude_resume_command "$record" ;;
+    opencode) opencode_resume_command "$record" ;;
   esac
+}
+
+# Usage: opencode_resume_command RECORD
+# For a valid OpenCode record: cd to the session's directory and run
+# opencode -s SESSION_ID. Fail if the directory no longer exists.
+opencode_resume_command() {
+  local dir id
+  dir=$(jq -r '.cwd' <<<"$1")
+  id=$(jq -r '.session_id' <<<"$1")
+  [[ -d $dir ]] || {
+    warn "saved directory no longer exists: $dir"
+    return 1
+  }
+  printf 'cd -- %s && opencode -s %s' "$(quote "$dir")" "$(quote "$id")"
 }
 
 # Usage: claude_resume_command RECORD

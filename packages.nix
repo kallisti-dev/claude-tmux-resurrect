@@ -50,6 +50,31 @@ let
       "x86_64-linux"
     ];
   };
+  # A plugin directory that an agent loads, with its wrapped scripts.
+  agentPlugin =
+    {
+      agent,
+      files,
+      description,
+    }:
+    stdenvNoCC.mkDerivation {
+      pname = "tmux-agent-resurrect-${agent}-plugin";
+      inherit version;
+      src = source files;
+      strictDeps = true;
+      nativeBuildInputs = [ makeWrapper ];
+      buildInputs = [ bash ];
+      dontBuild = true;
+      installPhase = ''
+        runHook preInstall
+        cp -R . "$out"
+        ${wrapScripts ''"$out"/bin/*''}
+        runHook postInstall
+      '';
+      meta = meta // {
+        inherit description;
+      };
+    };
 in
 {
   tmux-plugin = tmuxPlugins.mkTmuxPlugin {
@@ -76,26 +101,22 @@ in
     };
   };
 
-  claude-plugin = stdenvNoCC.mkDerivation {
-    pname = "tmux-agent-resurrect-claude-plugin";
-    inherit version;
-    src = source [
+  claude-plugin = agentPlugin {
+    agent = "claude";
+    files = [
       ./bin/tmux-agent-resurrect-claude-hook
       ./hooks
       ./skills
     ];
-    strictDeps = true;
-    nativeBuildInputs = [ makeWrapper ];
-    buildInputs = [ bash ];
-    dontBuild = true;
-    installPhase = ''
-      runHook preInstall
-      cp -R . "$out"
-      ${wrapScripts ''"$out"/bin/*''}
-      runHook postInstall
-    '';
-    meta = meta // {
-      description = "Claude Code plugin with the session hooks for the tmux-agent-resurrect tmux plugin";
-    };
+    description = "Claude Code plugin with the session hooks for the tmux-agent-resurrect tmux plugin";
+  };
+
+  opencode-plugin = agentPlugin {
+    agent = "opencode";
+    files = [
+      ./bin/tmux-agent-resurrect-record
+      ./opencode
+    ];
+    description = "OpenCode plugin that records sessions for the tmux-agent-resurrect tmux plugin";
   };
 }

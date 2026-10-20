@@ -30,7 +30,7 @@ while IFS=$'\t' read -r command row; do
     running=$(agent_of_command "$command")
     if [[ -n $pending ]] && valid_record "$pending"; then
       jq -c --argjson row "$row" '. + $row' <<<"$pending" >>"$records"
-    elif [[ -n $running ]]; then
+    elif [[ -n $running ]] && ! reports_late "$running"; then
       unrecorded+=("$pane")
       targets+=("$(agent_label "$running") in ${target#=}")
     fi
@@ -42,7 +42,13 @@ while IFS=$'\t' read -r command row; do
     warn "invalid session on $pane: $session; skipping"
     continue
   fi
-  dir=$(tmux display-message -p -t "$pane" '#{pane_current_path}')
+  # Without a reliable end report, a recorded session counts only while its
+  # agent is still running in the pane.
+  if reports_late "$agent" && [[ $(agent_of_command "$command") != "$agent" ]]; then
+    continue
+  fi
+  dir=$(pane_option "$pane" @agent-resurrect-cwd)
+  [[ $dir == /* ]] || dir=$(tmux display-message -p -t "$pane" '#{pane_current_path}')
   worktree=''
   if [[ $agent == claude ]]; then
     if transcript=$(find_transcript "$id"); then

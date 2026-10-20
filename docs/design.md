@@ -6,20 +6,31 @@ session ID and prepare the command needed to resume it.
 
 ## Plugin loading
 
-The repository is both a tmux plugin and a Claude Code plugin. tmux runs
-`tmux-agent-resurrect.tmux`, through TPM or `run-shell`, which runs setup. Setup
-registers the resurrect and tmux callbacks. When the plugin directory also holds
-`hooks/hooks.json`, as a TPM clone does, setup adds the directory to
-`CLAUDE_CODE_PLUGIN_DIRS` in tmux's global environment. Claude Code loads each
-directory listed in that variable in place, as a session-only plugin, so Claude
-sessions started in new panes run `hooks/hooks.json` from the same directory as
-the tmux callbacks, and the two halves come from the same files.
+The repository is a tmux plugin that is also a Claude Code plugin and holds an
+OpenCode plugin. tmux runs `tmux-agent-resurrect.tmux`, through TPM or
+`run-shell`, which runs setup. Setup registers the resurrect and tmux
+callbacks. When the plugin directory also holds `hooks/hooks.json`, as a TPM
+clone does, setup adds the directory to `CLAUDE_CODE_PLUGIN_DIRS` in tmux's
+global environment. Claude Code loads each directory listed in that variable in
+place, as a session-only plugin, so Claude sessions started in new panes run
+`hooks/hooks.json` from the same directory as the tmux callbacks, and both come
+from the same files.
 
-The Nix packages split the halves instead. The tmux plugin package has no
-hooks, so setup leaves the variable alone, and the Claude plugin package is
-installed where Claude Code loads plugins, such as its `skills` directory.
-Either way, the tmux options under [transient tmux state](#transient-tmux-state)
-are the only interface between the halves.
+When the directory holds `opencode/tmux-agent-resurrect.js`, setup also adds
+that file to the plugin list in tmux's global `OPENCODE_CONFIG_CONTENT`,
+keeping the rest of that JSON. OpenCode loads plugins listed there in addition
+to those in its configuration files. The OpenCode TUI runs plugins in a worker
+thread with the pane's environment, where the plugin reports the session to
+`tmux-agent-resurrect-record` when a root session is created or prompted, and
+reports its end when OpenCode shuts down cleanly. `opencode run`, `serve`, and
+`web` run plugins on the main thread, where the plugin does nothing.
+
+The Nix packages split the halves instead. The tmux plugin package has neither
+agent plugin, so setup leaves both variables alone, and each agent plugin
+package is installed where that agent loads plugins, such as Claude Code's
+`skills` directory or OpenCode's configuration file. Either way, the tmux
+options under [transient tmux state](#transient-tmux-state) are the only
+interface between the halves.
 
 Setup records the directory it listed and replaces that entry when the plugin
 moves, keeping entries that something else added. A process keeps the
@@ -35,9 +46,17 @@ packages of different versions.
 Claude's SessionStart hook records the exact session ID on its tmux pane.
 SessionEnd clears that ID only if it still matches, so a delayed event cannot
 clear a newer conversation. Saving adds these mappings to the resurrect snapshot
-and blanks the generic saved Claude commands to prevent a second process restart.
+and blanks the generic saved agent commands to prevent a second process restart.
 When resuming, there is no fallback to a session picker: a missing or ambiguous
 transcript is skipped with a diagnostic.
+
+OpenCode reports sessions late: a new session exists only after its first
+prompt, a session reopened with `-s` is reported at its next prompt, and an
+unclean exit reports nothing. For such an agent, the dispatcher records the
+session it resumes as soon as it types the command, and a save keeps a recorded
+session only while the pane's command is still that agent. Panes running it
+without a recorded session are not reported, because before the first prompt
+there is nothing to resume.
 
 Restore is split into two hooks because resurrect switches between sessions while
 rebuilding its layout. The pre-restore hook blocks launches during those switches.
@@ -106,6 +125,7 @@ current value is still the one setup installed.
 | `.claude-plugin/plugin.json`, `hooks/hooks.json` | Claude Code plugin manifest and session hook configuration |
 | `tmux-agent-resurrect-setup [--remove]` | Register or remove hooks and the `CLAUDE_CODE_PLUGIN_DIRS` entry while preserving other integrations |
 | `tmux-agent-resurrect-claude-hook` | Claude Code's session hook: record `@agent-resurrect-session` on SessionStart; clear a matching session on SessionEnd |
+| `tmux-agent-resurrect-record start\|end AGENT ID [DIR]` | Record or clear a session on the calling pane, for agent plugins such as OpenCode's |
 | `tmux-agent-resurrect-save SNAPSHOT` | Resolve cwd/worktree, embed mappings, blank generic saved agent commands |
 | `tmux-agent-resurrect-pre-restore` | Suppress launches during resurrect's layout restoration |
 | `tmux-agent-resurrect-post-restore [SNAPSHOT]` | Queue exact resume commands, clear the restore gate, and launch sessions that have attached clients |
@@ -139,6 +159,7 @@ integration. There is no network service or telemetry in these scripts.
 | Option | Scope | Purpose |
 | --- | --- | --- |
 | `@agent-resurrect-session` | Pane | The agent and session ID running in the pane, such as `claude 1111…`, maintained by the agent's hooks |
+| `@agent-resurrect-cwd` | Pane | The recorded session's directory, from agents whose session files save does not read |
 | `@agent-resurrect-resume-data` | Pane | Snapshot metadata waiting to be dispatched |
 | `@agent-resurrect-resume-cmd` | Pane | Generated resume command, available for inspection |
 | `@agent-resurrect-launched` | Pane | Command already dispatched during this pane's lifetime |

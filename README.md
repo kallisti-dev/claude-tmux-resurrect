@@ -1,6 +1,6 @@
 # tmux-agent-resurrect
 
-A tmux plugin that restores Claude Code conversations with
+A tmux plugin that restores Claude Code and OpenCode conversations with
 [tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect).
 
 ## Requirements
@@ -8,7 +8,8 @@ A tmux plugin that restores Claude Code conversations with
 - macOS or Linux
 - tmux 3.2 or newer, with tmux-resurrect
 - Claude Code 2.1.280 or newer, or 2.1.157 or newer with the
-  [Nix packages](#nix) and Home Manager
+  [Nix packages](#nix) and Home Manager; or OpenCode 1.18 or newer in the 1.x
+  line. OpenCode 2 is not supported.
 - Bash 3.2 or newer and jq 1.6 or newer on the tmux server's `PATH`, unless
   you use the Nix packages
 - [TPM](https://github.com/tmux-plugins/tpm), or another way to load a tmux
@@ -32,18 +33,22 @@ Set any `@resurrect-hook-*` options before TPM's `run` line, then press
 prefix + I to install the plugin.
 
 Each time tmux loads the plugin, it registers its resurrect callbacks alongside
-existing ones and adds its directory to `CLAUDE_CODE_PLUGIN_DIRS` in tmux's
-global environment. Claude Code sessions started in new panes load the plugin's
-session hooks from that directory, as the session-only plugin
-`tmux-resurrect@inline`. Nothing is installed into Claude Code's configuration.
+existing ones and lists its agent plugins in tmux's global environment, so
+agents started in new panes load them from the plugin directory:
 
-Panes opened before the plugin first loaded don't have the variable, so Claude
-sessions started in them are not tracked. Start those sessions again in a new
-pane, for example with `claude --continue`, then make a fresh resurrect save.
-After the next tmux server start, every pane has the variable.
+- Claude Code loads the directory listed in `CLAUDE_CODE_PLUGIN_DIRS` as the
+  session-only plugin `tmux-resurrect@inline`.
+- OpenCode loads the plugin file listed in `OPENCODE_CONFIG_CONTENT`, in
+  addition to the plugins in its configuration files.
 
-If your shell startup files set `CLAUDE_CODE_PLUGIN_DIRS`, append to the
-inherited value instead of replacing it:
+Nothing is installed into either agent's configuration. Panes opened before the
+plugin first loaded don't have these variables, so agent sessions started in
+them are not tracked. Start those sessions again in a new pane, for example
+with `claude --continue`, then make a fresh resurrect save. After the next tmux
+server start, every pane has the variables.
+
+If your shell startup files set `CLAUDE_CODE_PLUGIN_DIRS` or
+`OPENCODE_CONFIG_CONTENT`, add to the inherited value instead of replacing it:
 
 ```sh
 export CLAUDE_CODE_PLUGIN_DIRS="${CLAUDE_CODE_PLUGIN_DIRS:+$CLAUDE_CODE_PLUGIN_DIRS:}$HOME/my-plugins"
@@ -96,7 +101,7 @@ plugin:
 
 ## Usage
 
-Authenticate Claude Code before saving sessions. Restored panes must use a
+Authenticate the agents before saving sessions. Restored panes must use a
 Bourne-compatible shell (`bash`, `zsh`, `sh`, `dash`, or `ksh`).
 
 Use your normal tmux-resurrect save and restore bindings (by default,
@@ -110,10 +115,17 @@ The plugin reports problems in tmux's message line: for example, when a save
 finds Claude running in a pane without a recorded session ID, or a restore
 cannot resume a saved session.
 
-For a named worktree at `<repo>/.claude/worktrees/<name>`, the command is run from
-`<repo>` using `claude --resume SESSION_ID --worktree NAME`. Other sessions use
-the latest valid absolute `cwd` in their transcript, falling back to the pane's
-directory if there is no usable transcript cwd.
+Claude Code sessions resume with `claude --resume SESSION_ID`. For a named
+worktree at `<repo>/.claude/worktrees/<name>`, the command is run from `<repo>`
+and adds `--worktree NAME`. Other sessions use the latest valid absolute `cwd`
+in their transcript, falling back to the pane's directory if there is no usable
+transcript cwd.
+
+OpenCode sessions resume with `opencode -s SESSION_ID`, run from the session's
+directory. OpenCode reports a session to the plugin at its first prompt, so a
+session that has had no prompt is not saved. A session you switch to inside
+OpenCode is recorded at its next prompt; until then, a save keeps the session
+the pane last prompted.
 
 ## Configuration
 
@@ -141,12 +153,14 @@ configuration directory per tmux server is supported.
 
 ## Nix
 
-The flake provides the two halves as separate packages, each with its runtime
-dependencies wrapped in:
+The flake provides the tmux plugin and each agent's plugin as separate
+packages, each with its runtime dependencies wrapped in:
 
 - `tmux-plugin`, built with nixpkgs' `tmuxPlugins.mkTmuxPlugin`
 - `claude-plugin`, the Claude Code plugin with the session hooks and
   `/tmux-resurrect:check`
+- `opencode-plugin`, whose `opencode/tmux-agent-resurrect.js` is the OpenCode
+  plugin
 
 Install each where you configure that program. With Home Manager:
 
@@ -161,27 +175,32 @@ in
     tmux-agent-resurrect.tmux-plugin
   ];
   programs.claude-code.plugins.tmux-resurrect = tmux-agent-resurrect.claude-plugin;
+  programs.opencode.settings.plugin = [
+    "${tmux-agent-resurrect.opencode-plugin}/opencode/tmux-agent-resurrect.js"
+  ];
 }
 ```
 
 Home Manager links the Claude plugin into Claude Code's `skills` directory,
-where Claude Code 2.1.157 or newer loads it in every session. The tmux plugin
-then leaves `CLAUDE_CODE_PLUGIN_DIRS` alone, so restarting Claude in any pane
-loads the hooks. Without Home Manager's `programs.claude-code`, link the Claude
-plugin package to `~/.claude/skills/tmux-resurrect` yourself. NixOS's
+where Claude Code 2.1.157 or newer loads it in every session, and lists the
+OpenCode plugin in OpenCode's configuration file. The tmux plugin then leaves
+`CLAUDE_CODE_PLUGIN_DIRS` and `OPENCODE_CONFIG_CONTENT` alone, so restarting an
+agent in any pane loads its plugin. Without Home Manager, link the Claude plugin
+package to `~/.claude/skills/tmux-resurrect` and list the OpenCode plugin file
+in the `plugin` list of OpenCode's `opencode.json` yourself. NixOS's
 `programs.tmux.plugins` takes the same tmux plugin.
 
 Both modules load tmux plugins before `programs.tmux.extraConfig`, so set any
 `@resurrect-hook-*` options in a plugin entry's `extraConfig` with Home
 Manager, or in `programs.tmux.extraConfigBeforePlugins` with NixOS.
 
-Without flakes, `default.nix` builds the same two packages with the nixpkgs
+Without flakes, `default.nix` builds the same packages with the nixpkgs
 revision pinned in `flake.lock`, or with a `pkgs` argument you pass:
 
 ```nix
 tmux-agent-resurrect = import (builtins.fetchTarball
   "https://github.com/kallisti-dev/tmux-agent-resurrect/archive/main.tar.gz") { inherit pkgs; };
-# Then use tmux-agent-resurrect.tmux-plugin and tmux-agent-resurrect.claude-plugin.
+# Then use tmux-agent-resurrect.tmux-plugin, .claude-plugin, and .opencode-plugin.
 ```
 
 ## Development
@@ -193,16 +212,17 @@ tests use real tmux, tmux-resurrect, and TPM, with a stub in place of Claude:
 python3 -m unittest discover -s tests
 ```
 
-To also run the tests that start Claude Code, without network access, set
-`CLAUDE_BINARY`:
+To also run the tests that start Claude Code and OpenCode, without network
+access, set `CLAUDE_BINARY` and `OPENCODE_BINARY`:
 
 ```sh
-CLAUDE_BINARY=$(command -v claude) python3 -m unittest discover -s tests -k test_real_claude
+CLAUDE_BINARY=$(command -v claude) OPENCODE_BINARY=$(command -v opencode) \
+  python3 -m unittest discover -s tests -k test_real_
 ```
 
 `nix flake check` runs the tests against the source and the Nix packages, along
-with linting and formatting checks and the Claude Code tests. On macOS, the
-Claude Code check needs the Nix build sandbox off or relaxed, as building
+with linting and formatting checks and the tests with the real agents. On
+macOS, that check needs the Nix build sandbox off or relaxed, as building
 claude-code there does.
 
 Releases are tags on `main`. To release, set the version in
