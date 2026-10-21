@@ -77,14 +77,6 @@ update_opencode_config() {
   fi
 }
 
-# Usage: guarded QUOTED_PATH
-# Print a shell command that runs QUOTED_PATH, a path already quoted for the
-# shell, with any arguments appended to the command. Once the path no longer
-# exists, the command succeeds without running anything: tmux keeps these
-# registrations until its server exits, even after a plugin manager deletes
-# this directory.
-guarded() { printf '[ ! -e %s ] || %s' "$1" "$1"; }
-
 compose_hook() {
   local phase=$1 previous=$2 own=$3 name
   if [[ -z $previous ]]; then

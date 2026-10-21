@@ -104,6 +104,8 @@ Each registered command first checks that its script still exists and otherwise
 succeeds without doing anything. A tmux server keeps registrations until it
 exits, and reloading a configuration does not remove them, so this keeps hooks
 left behind by an uninstall from failing while other callbacks still run.
+Scheduled notices check the same way, since tmux shows a failed delayed command
+in view mode in the current pane, where pending resumes wait.
 
 The existing command runs in a subshell, so an `exit` cannot prevent ours from
 running. Its shell-local directory and environment changes stay in that subshell.

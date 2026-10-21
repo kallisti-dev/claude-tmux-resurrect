@@ -9,6 +9,14 @@ plugin_bin=$(cd -- "${BASH_SOURCE[0]%/*}/../bin" && pwd)
 # Print MESSAGE on stderr, prefixed with the project name.
 warn() { printf 'tmux-agent-resurrect: %s\n' "$*" >&2; }
 
+# Usage: guarded QUOTED_PATH
+# Print a shell command that runs QUOTED_PATH, a path already quoted for the
+# shell, with any arguments appended to the command. Once the path no longer
+# exists, the command succeeds without running anything: tmux keeps hook
+# registrations until its server exits, and runs delayed commands later, even
+# after a plugin manager deletes this directory.
+guarded() { printf '[ ! -e %s ] || %s' "$1" "$1"; }
+
 # Usage: notify MESSAGE...
 # Warn with MESSAGE, then show it on attached tmux clients a second later:
 # tmux-resurrect shows its own message after running hooks, which would
@@ -16,7 +24,9 @@ warn() { printf 'tmux-agent-resurrect: %s\n' "$*" >&2; }
 notify() {
   local command
   warn "$*"
-  command="$(quote "$plugin_bin/tmux-agent-resurrect-notify") $(quote "$*")"
+  # tmux shows a delayed command's failure in view mode in the current pane,
+  # where resumes wait.
+  command="$(guarded "$(quote "$plugin_bin/tmux-agent-resurrect-notify")") $(quote "$*")"
   # run-shell expands formats in its command.
   tmux run-shell -b -d 1 "${command//#/##}" 2>/dev/null || true
 }

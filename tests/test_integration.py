@@ -638,6 +638,13 @@ class Integration(unittest.TestCase):
             self.assertEqual(handler[:2], ["run-shell", "-b"])
             # Run the registered command synchronously to observe its status.
             self.tmux("run-shell", handler[2])
+        # The first-load notice runs a second after loading, without its
+        # script, and must not leave the pane in view mode, where resumes wait.
+        time.sleep(1.5)
+        self.assertEqual(
+            self.tmux("display", "-p", "-t", self.pane, "#{pane_mode}").stdout.strip(),
+            "",
+        )
 
     @unittest.skipUnless(FORMER, "CLAUDE_TMUX_RESURRECT_SOURCE is supplied by Nix")
     def test_setup_replaces_the_registrations_made_under_the_former_name(self):
