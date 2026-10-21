@@ -85,6 +85,10 @@ class Integration(unittest.TestCase):
             "LC_ALL": "C",
             "TMPDIR": str(self.base),
             "CLAUDE_TEST_LOG": str(self.log),
+            # Pane shells would otherwise write their history into HOME when
+            # kill-server hangs up on them, which it does not wait for, while
+            # cleanup removes the directory.
+            "HISTFILE": "",
         }
         # The only executables named claude and opencode available before the
         # inherited PATH are these stubs. They log argv/cwd, with the program
