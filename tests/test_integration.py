@@ -750,6 +750,36 @@ class Integration(unittest.TestCase):
             self.assertEqual(self.option("@claude_resume_data", pane), "")
         self.assertEqual(len(self.launches()), 2)
 
+    @unittest.skipUnless(FORMER, "CLAUDE_TMUX_RESURRECT_SOURCE is supplied by Nix")
+    def test_hook_records_sessions_for_the_former_version_until_setup_runs(self):
+        # A Home Manager switch links the current Claude plugin before tmux
+        # reloads its configuration, so the current hook runs while the
+        # callbacks registered under the former name save and restore.
+        former = self.former_plugin()
+        self.load_plugin(former / "claude-tmux-resurrect.tmux")
+        self.tmux("set", "-p", "-t", self.pane, "@claude_resume_data", "{}")
+        self.transcript()
+        self.hook("SessionStart")
+        self.assertEqual(self.option("@claude_session_id"), ID)
+        self.assertEqual(self.option("@claude_resume_data"), "")
+        self.write_snapshot()
+        self.execute_resurrect_hook("post-save-layout", self.snapshot)
+        [line] = [
+            line
+            for line in self.snapshot.read_text().splitlines()
+            if line.startswith("claude-tmux\t")
+        ]
+        self.assertEqual(json.loads(line.split("\t", 1)[1])["session_id"], ID)
+
+        self.load_plugin()
+        self.write_snapshot()
+        self.execute_resurrect_hook("post-save-layout", self.snapshot)
+        self.assertEqual([record["session_id"] for record in self.records()], [ID])
+        self.transcript(session_id="cleared-id")
+        self.hook("SessionStart", "cleared-id")
+        self.assertEqual(self.option("@claude_session_id"), "")
+        self.assertEqual(self.option("@agent-resurrect-session"), "claude cleared-id")
+
     @unittest.skipIf(SEPARATE, "the packaged tmux plugin does not hold the hooks")
     def test_new_panes_list_the_plugin_beside_other_plugin_directories(self):
         self.tmux("set-environment", "-g", "CLAUDE_CODE_PLUGIN_DIRS", "/other/plugins")

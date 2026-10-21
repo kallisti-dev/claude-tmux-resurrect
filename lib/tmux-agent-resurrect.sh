@@ -150,6 +150,14 @@ agent_of_command() {
 # tmux-agent-resurrect-claude-hook repeat this pattern in jq.
 valid_id() { [[ $1 =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$ ]]; }
 
+# Usage: former_registered
+# Succeed if this tmux server runs the callbacks that setup registered under
+# the plugin's former name, claude-tmux-resurrect. That version keeps them in
+# options for its managed resurrect hooks and tmux hook slots.
+former_registered() {
+  [[ $'\n'$(tmux show-options -g) =~ $'\n'@claude-tmux-resurrect-(managed|client)- ]]
+}
+
 # Usage: pane_session PANE
 # Print the session recorded on PANE as AGENT ID, or nothing. A Claude Code
 # session that loaded this plugin under its former name, claude-tmux-resurrect,
@@ -167,9 +175,11 @@ pane_session() {
 
 # Usage: record_session PANE AGENT ID [DIRECTORY]
 # Record that PANE runs AGENT's session ID, in DIRECTORY if given, replacing
-# any pending resume and any session recorded under the former name. The
-# directory is set first, so a reader that sees the session also sees its
-# directory.
+# any pending resume. The directory is set first, so a reader that sees the
+# session also sees its directory. Callbacks registered under the former name
+# read only what that version's hook records, so while they run, a Claude
+# session is also recorded that way; otherwise any session recorded that way
+# is cleared.
 record_session() {
   if [[ -n ${4:-} ]]; then
     tmux set-option -p -t "$1" @agent-resurrect-cwd "$4"
@@ -177,7 +187,13 @@ record_session() {
     tmux set-option -pu -t "$1" @agent-resurrect-cwd
   fi
   tmux set-option -p -t "$1" @agent-resurrect-session "$2 $3"
-  tmux set-option -pu -t "$1" @claude_session_id
+  if [[ $2 == claude ]] && former_registered; then
+    tmux set-option -p -t "$1" @claude_session_id "$3"
+    tmux set-option -pu -t "$1" @claude_resume_cmd
+    tmux set-option -pu -t "$1" @claude_resume_data
+  else
+    tmux set-option -pu -t "$1" @claude_session_id
+  fi
   tmux set-option -pu -t "$1" @agent-resurrect-resume-cmd
   tmux set-option -pu -t "$1" @agent-resurrect-resume-data
 }

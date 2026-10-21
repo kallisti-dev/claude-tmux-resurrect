@@ -133,8 +133,11 @@ Claude session that loaded the earlier version keeps running that version's
 hook, which records only the session ID, in `@claude_session_id`. Save,
 restore, and the check read that option for a pane without
 `@agent-resurrect-session`, and the current hook clears it when it records or
-ends a session. Where the plugin directory was updated in place, as in a TPM
-clone or a Home Manager link, such a session runs
+ends a session. The earlier version's callbacks read only that option, so
+while they are still registered, as after a Home Manager switch until tmux
+reloads its configuration, the current hook records Claude sessions there too.
+Where the plugin directory was updated in place, as in a TPM clone or a Home
+Manager link, such a session runs
 `claude-tmux-resurrect-hook`, which runs the current hook. Restore also reads
 the earlier version's snapshot records, which begin `claude-tmux` and do not
 name an agent, as Claude's.

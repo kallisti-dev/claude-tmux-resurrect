@@ -54,10 +54,8 @@ else
 fi
 
 # Setup removes the registrations made under the plugin's former name, so any
-# left mean that version loaded after it or setup has not run since. That
-# version records them in its options for managed resurrect hooks and tmux
-# hook slots.
-if [[ $'\n'$(tmux show-options -g) =~ $'\n'@claude-tmux-resurrect-(managed|client)- ]]; then
+# left mean that version loaded after it or setup has not run since.
+if former_registered; then
   problem 'the plugin is still registered under its former name, claude-tmux-resurrect; remove anything that loads that version from the tmux configuration, then reload it'
 fi
 
