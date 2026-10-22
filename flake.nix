@@ -38,12 +38,16 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
-          runtime = with pkgs; [
-            bash
-            tmux
-            jq
-            coreutils
-          ];
+          runtime =
+            with pkgs;
+            [
+              bash
+              tmux
+              jq
+              coreutils
+            ]
+            # Linux has process command lines in /proc.
+            ++ lib.optionals stdenv.hostPlatform.isDarwin [ ps ];
           testTools =
             with pkgs;
             [

@@ -154,6 +154,63 @@ agent_of_command() {
   done
 }
 
+# Usage: agent_of_pane COMMAND FULL_COMMAND
+# Print the agent that a pane's foreground process runs, or nothing, from its
+# #{pane_current_command} or else its command line, with arguments separated
+# by spaces: the program it was started as, or the script that an interpreter
+# such as node runs. macOS names a process after the file that a symlink
+# resolves to, such as versions/2.1.300 for Claude's native installer.
+agent_of_pane() {
+  local agent words=()
+  agent=$(agent_of_command "$1")
+  if [[ -z $agent ]]; then
+    read -ra words <<<"${2:-}"
+    if [[ ${#words[@]} -gt 0 ]]; then
+      agent=$(agent_of_command "${words[0]##*/}")
+    fi
+    if [[ -z $agent && ${#words[@]} -gt 1 && ${words[0]##*/} =~ ^(node|bun|deno)$ ]]; then
+      agent=$(agent_of_command "${words[1]##*/}")
+    fi
+  fi
+  printf '%s' "$agent"
+}
+
+# Usage: read_args PID
+# Set the array process_args to the command line of process PID. Linux keeps
+# its arguments apart in /proc; elsewhere ps joins them with spaces, so they
+# are split at spaces and an argument that contains one becomes several.
+read_args() {
+  local arg
+  process_args=()
+  if [[ -r /proc/$1/cmdline ]]; then
+    while IFS= read -r -d '' arg; do
+      process_args+=("$arg")
+    done <"/proc/$1/cmdline"
+  else
+    read -ra process_args <<<"$(ps -o args= -p "$1" 2>/dev/null || true)"
+  fi
+}
+
+# Usage: foreground_command PID
+# Print the command line, with arguments separated by spaces, of the
+# foreground process on the terminal of process PID, such as a pane's shell.
+foreground_command() {
+  local stat fields group
+  if [[ -r /proc/$1/stat ]]; then
+    # The fields after the parenthesized name are state, ppid, pgrp, session,
+    # tty_nr, and tpgid.
+    stat=$(<"/proc/$1/stat")
+    read -ra fields <<<"${stat##*)}"
+    group=${fields[5]:-}
+  else
+    group=$(ps -o tpgid= -p "$1" 2>/dev/null || true)
+    group=${group//[[:space:]]/}
+  fi
+  [[ $group =~ ^[0-9]+$ ]] || return 0
+  read_args "$group"
+  printf '%s' "${process_args[*]:-}"
+}
+
 # Usage: valid_id ID
 # Succeed if ID has the form of an agent session ID: 1 to 128 letters, digits,
 # underscores, or hyphens, starting with a letter or digit. valid_record and

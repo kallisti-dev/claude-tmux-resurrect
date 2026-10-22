@@ -7,6 +7,7 @@
   tmux,
   jq,
   coreutils,
+  ps,
 }:
 let
   inherit (lib.importJSON ./.claude-plugin/plugin.json) version;
@@ -32,12 +33,16 @@ let
   wrapScripts = scripts: ''
     for script in ${scripts}; do
       wrapProgram "$script" --prefix PATH : ${
-        lib.makeBinPath [
-          bash
-          tmux
-          jq
-          coreutils
-        ]
+        lib.makeBinPath (
+          [
+            bash
+            tmux
+            jq
+            coreutils
+          ]
+          # Linux has process command lines in /proc.
+          ++ lib.optionals stdenvNoCC.hostPlatform.isDarwin [ ps ]
+        )
       }
     done
   '';

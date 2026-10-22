@@ -10,25 +10,28 @@ need mktemp mv rm
 snapshot=$1
 umask 077
 records=$(mktemp "${snapshot}.agent-resurrect-records.XXXXXX")
+running_panes=$(mktemp "${snapshot}.agent-resurrect-running.XXXXXX")
 output=$(mktemp "${snapshot}.agent-resurrect-save.XXXXXX")
-trap 'rm -f -- "$records" "$output"' EXIT
+trap 'rm -f -- "$records" "$running_panes" "$output"' EXIT
 
 # Use snapshot pane identities rather than whitespace-delimited list-panes.
 # This also respects resurrect's decision to omit grouped sessions. Each line
-# holds the pane's command, after a colon that keeps an empty one a field,
-# and its identity.
+# holds the pane's command and full command line, each after a colon that
+# keeps an empty one a field, and its identity.
 unrecorded=() targets=()
-while IFS=$'\t' read -r command row; do
+while IFS=$'\t' read -r command full row; do
   command=${command#:}
+  full=${full#:}
   target=$(jq -r '"=" + .session + ":" + .window + "." + .pane' <<<"$row")
   pane=$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null) || continue
   [[ -n $pane ]] || continue
+  running=$(agent_of_pane "$command" "$full")
+  [[ -z $running ]] || printf '%s\n' "$row" >>"$running_panes"
   session=$(pane_session "$pane")
   if [[ -z $session ]]; then
     # Keep sessions still waiting to launch, and those dispatched whose agent
     # has not reported them yet.
     pending=$(pane_option "$pane" @agent-resurrect-resume-data)
-    running=$(agent_of_command "$command")
     if [[ -n $pending ]] && valid_record "$pending"; then
       jq -c --argjson row "$row" '. + $row' <<<"$pending" >>"$records"
     elif [[ -n $running ]] && ! reports_late "$running"; then
@@ -45,7 +48,7 @@ while IFS=$'\t' read -r command row; do
   fi
   # Without a reliable end report, a recorded session counts only while its
   # agent is still running in the pane.
-  if reports_late "$agent" && [[ $(agent_of_command "$command") != "$agent" ]]; then
+  if reports_late "$agent" && [[ $running != "$agent" ]]; then
     continue
   fi
   dir=$(pane_option "$pane" @agent-resurrect-cwd)
@@ -78,7 +81,7 @@ while IFS=$'\t' read -r command row; do
     warn "unsupported metadata on $pane (control characters or invalid pane identity); skipping"
   fi
 done < <(jq -Rr 'split("\t") | select(.[0] == "pane" and length >= 11) |
-  ":\(.[9])\t\({session: .[1], window: .[2], pane: .[5]} | tojson)"' "$snapshot")
+  ":\(.[9])\t\(.[10])\t\({session: .[1], window: .[2], pane: .[5]} | tojson)"' "$snapshot")
 
 # Automatic saves repeat, so warn only when the set of agent panes without a
 # recorded session changes.
@@ -98,13 +101,15 @@ if [[ $panes != "$(tmux show-options -gqv @agent-resurrect-unrecorded)" ]]; then
 fi
 
 # Field 11 must be exactly ":" to suppress resurrect's generic process restart.
-# A recorded agent may run as node or under a shell, so include mapped panes.
-jq -Rr --slurpfile records "$records" --arg agents "(^|/)\\.?(${agents// /|})(\$|[-. ])" '
+# A recorded agent may run as node or under a shell, so include mapped panes,
+# and those whose command line shows an agent.
+jq -Rr --slurpfile records "$records" --slurpfile running "$running_panes" \
+  --arg agents "(^|/)\\.?(${agents// /|})(\$|[-. ])" '
   split("\t") as $f |
   if $f[0] == "agent-resurrect" then empty
   elif $f[0] == "pane" and ($f | length) >= 11 and
     (($f[9] | test($agents; "i")) or
-      any($records[]; .session == $f[1] and .window == $f[2] and .pane == $f[5]))
+      any($records[], $running[]; .session == $f[1] and .window == $f[2] and .pane == $f[5]))
   then $f | .[10] = ":" | join("\t")
   else . end
 ' "$snapshot" >"$output"

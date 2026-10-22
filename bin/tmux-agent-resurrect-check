@@ -133,8 +133,9 @@ else
 fi
 
 unrecorded=()
-while IFS=$'\t' read -r pane where command; do
+while IFS=$'\t' read -r pane where command pid; do
   running=$(agent_of_command "$command")
+  [[ -n $running ]] || running=$(agent_of_pane "$command" "$(foreground_command "$pid")")
   # An agent that reports late has no session to resume before its first
   # prompt.
   if [[ -z $running ]] || reports_late "$running"; then
@@ -142,7 +143,7 @@ while IFS=$'\t' read -r pane where command; do
   fi
   [[ -z $(pane_session "$pane") ]] || continue
   unrecorded+=("$(agent_label "$running") in $where")
-done < <(tmux list-panes -a -F $'#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}')
+done < <(tmux list-panes -a -F $'#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}\t#{pane_pid}')
 if [[ ${#unrecorded[@]} == 0 ]]; then
   ok 'every pane running an agent has a recorded session'
 else

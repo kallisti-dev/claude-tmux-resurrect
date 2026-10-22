@@ -49,6 +49,10 @@ that directory, and resuming it needs the same one. SessionEnd clears them
 only if the ID still matches, so a delayed event cannot clear a newer
 conversation. Saving adds these mappings to the resurrect snapshot
 and blanks the generic saved agent commands to prevent a second process restart.
+A pane runs an agent if its process name or, failing that, its command line
+names one: macOS names a process after the file a symlink resolves to, such as
+`versions/2.1.300` for Claude's native installer, and an npm installation runs
+as `node`.
 When resuming, there is no fallback to a session picker: a missing or ambiguous
 transcript is skipped with a diagnostic. A session whose directory does not
 exist may be on a volume that is not mounted yet, so it stays queued, and in

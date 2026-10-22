@@ -966,6 +966,26 @@ class Integration(unittest.TestCase):
         self.assertEqual(self.global_option("@agent-resurrect-unrecorded"), "")
         self.expect_no_new_messages(shown + 1)
 
+    def test_save_finds_claude_panes_by_their_command_line(self):
+        # macOS names a process run through a symlink after the file it
+        # resolves to, which for Claude's native installer is named for its
+        # version. An npm installation runs as node.
+        for command, full, found in [
+            ("2.1.300", "claude --model haiku", True),
+            ("node", "node /usr/local/bin/claude", True),
+            ("node", "node build.js claude", False),
+        ]:
+            with self.subTest(command=command, full=full):
+                self.tmux("set", "-gu", "@agent-resurrect-unrecorded")
+                self.write_snapshot(command=command, full=full)
+                self.script("tmux-agent-resurrect-save", self.snapshot)
+                self.assertEqual(
+                    self.global_option("@agent-resurrect-unrecorded"),
+                    self.pane if found else "",
+                )
+                saved = self.snapshot.read_text().splitlines()[0].split("\t")[10]
+                self.assertEqual(saved, ":" if found else ":" + full)
+
     def test_restore_reports_sessions_it_cannot_resume(self):
         self.save()
         self.transcript().unlink()
@@ -1096,6 +1116,31 @@ class Integration(unittest.TestCase):
             ]
         for text in expected:
             self.assertIn(text, result.stdout)
+
+    def test_check_finds_claude_panes_by_their_command_line(self):
+        self.load_plugin()
+        # Claude's native installer links claude to a file named for its
+        # version, which macOS names the process after; Linux names it claude.
+        version = self.base / "versions/2.1.300"
+        version.parent.mkdir()
+        shutil.copy(BASH, version)
+        (self.stubdir / "claude").unlink()
+        (self.stubdir / "claude").symlink_to(version)
+        # The trailing command keeps Bash from replacing itself with sleep.
+        self.tmux("send-keys", "-t", self.pane, "claude -c 'sleep 60; :'", "Enter")
+        wait_until(
+            lambda: (
+                self.tmux(
+                    "display", "-p", "-t", self.pane, "#{pane_current_command}"
+                ).stdout.strip()
+                in {"2.1.300", "claude"}
+            ),
+            "claude not running",
+        )
+        result = self.check(self.fake_claude())
+        self.assertIn(
+            "problem  no session recorded for Claude in work:0.0", result.stdout
+        )
 
     def test_check_compares_a_separately_installed_claude_plugin(self):
         self.tmux("set", "-g", "@resurrect-save-script-path", "/resurrect/save.sh")
