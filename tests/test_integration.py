@@ -2137,18 +2137,13 @@ class Integration(unittest.TestCase):
         plugins = self.install_tpm()
         installed = plugins / "tmux-agent-resurrect"
         self.copy_plugin(installed)
-        lines = [
-            line
-            for line in self.readme_block("With TPM", "tmux").splitlines()
-            if "@plugin" in line and "tmux-plugins/tpm" not in line
-        ]
-        self.assertEqual(len(lines), 2)
+        lines = self.readme_block("With Oh my tmux!", "tmux")
         local = (Path(OH_MY_TMUX) / ".tmux.conf.local").read_text()
         for event in ["launch", "reload"]:
             setting = f"tmux_conf_update_plugins_on_{event}="
             self.assertIn(setting + "true", local)
             local = local.replace(setting + "true", setting + "false")
-        (self.home / ".tmux.conf.local").write_text(local + "\n".join(lines) + "\n")
+        (self.home / ".tmux.conf.local").write_text(local + lines)
         config = self.home / ".tmux.conf"
         shutil.copyfile(Path(OH_MY_TMUX) / ".tmux.conf", config)
         # It checks whether GitHub is reachable even when it doesn't update.

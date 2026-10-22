@@ -38,9 +38,17 @@ such as in `~/.config/tmux/plugins` or where a package manager installed it,
 keep your own `run` line. TPM-compatible managers such as
 [tpack](https://github.com/tmuxpack/tpack) read the same plugin lines.
 
-With [Oh my tmux!](https://github.com/gpakosz/.tmux), add the tmux-resurrect
-and tmux-agent-resurrect `@plugin` lines to `.tmux.conf.local`. Oh my tmux!
-runs TPM itself, so leave out TPM's own lines.
+### With Oh my tmux!
+
+[Oh my tmux!](https://github.com/gpakosz/.tmux) runs TPM itself. Add the
+plugin lines to `.tmux.conf.local`:
+
+```tmux
+set -g @plugin 'tmux-plugins/tmux-resurrect'
+set -g @plugin 'kallisti-dev/tmux-agent-resurrect'
+```
+
+Then press prefix + I to install the plugin.
 
 ### Manual installation
 
