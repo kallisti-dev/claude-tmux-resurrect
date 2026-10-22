@@ -71,10 +71,9 @@ command, as in `git clone --branch v0.1.0`.
 
 ### Agents in new panes
 
-With TPM or a clone, each time tmux loads the plugin, it registers its
-resurrect callbacks alongside existing ones and lists its agent plugins in
-tmux's global environment, so agents started in new panes load them from the
-plugin directory:
+Each time tmux loads the plugin, it registers its resurrect callbacks alongside
+existing ones and lists its agent plugins in tmux's global environment, so
+agents started in new panes load them from the plugin directory:
 
 - Claude Code loads the directory listed in `CLAUDE_CODE_PLUGIN_DIRS` as the
   session-only plugin `tmux-resurrect@inline`.

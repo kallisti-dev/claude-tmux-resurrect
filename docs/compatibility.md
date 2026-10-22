@@ -4,7 +4,7 @@
 
 The flake supports Apple Silicon macOS and Linux (`aarch64-darwin`,
 `aarch64-linux`, and `x86_64-linux`). Its pinned nixpkgs does not support Intel
-macOS; installing with TPM or a clone is untested there.
+macOS, and the plugin is untested there.
 
 TPM 3.0.0, which Debian 12 and Ubuntu 22.04 package, reads only
 `~/.tmux.conf` and cannot install a plugin line with a tag. Oh my tmux! loads
@@ -23,11 +23,10 @@ service, is unsupported. OpenCode reports a session at its first prompt, so a
 session switched to inside OpenCode is saved as the previous one until its next
 prompt.
 
-With TPM or a clone, Claude Code loads the plugin's hooks through
-`CLAUDE_CODE_PLUGIN_DIRS`, which requires version 2.1.280 or later; earlier
-versions ignore the variable, so their sessions are not tracked. Home Manager
-installs the Nix Claude plugin as a personal plugin, which requires 2.1.157 or
-later. Organization policies that stop these hooks are unsupported: [managed settings](https://code.claude.com/docs/en/managed-settings)
+Claude Code loads the plugin's hooks through `CLAUDE_CODE_PLUGIN_DIRS`, which
+requires version 2.1.280 or later; earlier versions ignore the variable, so
+their sessions are not tracked. Home Manager installs the Nix Claude plugin as
+a personal plugin, which requires 2.1.157 or later. Organization policies that stop these hooks are unsupported: [managed settings](https://code.claude.com/docs/en/managed-settings)
 can turn off plugins loaded from `CLAUDE_CODE_PLUGIN_DIRS`, `allowManagedHooksOnly`
 runs only hooks from managed settings and the plugins they force-enable, and
 `disableAllHooks` stops all hooks. `/status` shows which managed settings Claude

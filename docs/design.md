@@ -7,14 +7,13 @@ session ID and prepare the command needed to resume it.
 ## Plugin loading
 
 The repository is a tmux plugin that is also a Claude Code plugin and holds an
-OpenCode plugin. tmux runs `tmux-agent-resurrect.tmux`, through TPM or
-`run-shell`, which runs setup. Setup registers the resurrect and tmux
-callbacks. When the plugin directory also holds `hooks/hooks.json`, as a clone
-of this repository does, setup adds the directory to `CLAUDE_CODE_PLUGIN_DIRS`
-in tmux's global environment. Claude Code loads each directory listed in that
-variable in place, as a session-only plugin, so Claude sessions started in new
-panes run `hooks/hooks.json` from the same directory as the tmux callbacks, and
-both come from the same files.
+OpenCode plugin. tmux runs `tmux-agent-resurrect.tmux`, which runs setup.
+Setup registers the resurrect and tmux callbacks. When the plugin directory
+also holds `hooks/hooks.json`, as the repository does, setup adds the directory
+to `CLAUDE_CODE_PLUGIN_DIRS` in tmux's global environment. Claude Code loads
+each directory listed in that variable in place, as a session-only plugin, so
+Claude sessions started in new panes run `hooks/hooks.json` from the same
+directory as the tmux callbacks, and both come from the same files.
 
 When the directory holds `opencode/tmux-agent-resurrect.js`, setup also adds
 that file to the plugin list in tmux's global `OPENCODE_CONFIG_CONTENT`,
@@ -161,7 +160,7 @@ name an agent, as Claude's.
 
 | Component | Responsibility |
 | --- | --- |
-| `tmux-agent-resurrect.tmux` | Entry point for TPM or `run-shell`: run setup and display its failures |
+| `tmux-agent-resurrect.tmux` | tmux entry point: run setup and display its failures |
 | `.claude-plugin/plugin.json`, `hooks/hooks.json` | Claude Code plugin manifest and session hook configuration |
 | `tmux-agent-resurrect-setup [--remove]` | Register or remove hooks and the `CLAUDE_CODE_PLUGIN_DIRS` entry while preserving other integrations |
 | `tmux-agent-resurrect-claude-hook` | Claude Code's session hook: record `@agent-resurrect-session` on SessionStart; clear a matching session on SessionEnd |
