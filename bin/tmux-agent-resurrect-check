@@ -64,7 +64,7 @@ fi
 # them to a separately installed Claude plugin.
 listing=''
 if [[ -z $dir ]]; then
-  problem 'the plugin has not loaded in this tmux server; check its @plugin line, then reload the configuration'
+  problem 'the plugin has not loaded in this tmux server; check the line in the tmux configuration that loads it, then reload the configuration'
 else
   ok "the plugin ${version:-(unknown version)} is loaded from $dir"
   [[ $dir == "${plugin_bin%/bin}" ]] || info "this check runs from ${plugin_bin%/bin}"

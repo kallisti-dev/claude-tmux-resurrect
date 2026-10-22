@@ -36,6 +36,7 @@ PYTHON = shutil.which("python3")
 GIT = shutil.which("git")
 RESURRECT = os.environ.get("RESURRECT_SOURCE")
 TPM = os.environ.get("TPM_SOURCE")
+OH_MY_TMUX = os.environ.get("OH_MY_TMUX_SOURCE")
 # The plugin's last version under its former name.
 FORMER = os.environ.get("CLAUDE_TMUX_RESURRECT_SOURCE")
 CLAUDE = os.environ.get("CLAUDE_BINARY")
@@ -1997,9 +1998,10 @@ class Integration(unittest.TestCase):
 
         wait_until(lambda: not running(), f"{agent} did not exit", 30)
 
-    def install_tpm(self):
-        # TPM and resurrect, where the README's configuration loads them.
-        plugins = self.home / ".tmux/plugins"
+    def install_tpm(self, plugins=None):
+        # TPM and resurrect, where the README's configuration loads them, or
+        # in PLUGINS.
+        plugins = plugins or self.home / ".tmux/plugins"
         for name, source in [("tpm", TPM), ("tmux-resurrect", RESURRECT)]:
             copied = self.copy_tree(Path(source), plugins / name)
             # TPM treats any Git repository in its directory as installed.
@@ -2017,55 +2019,159 @@ class Integration(unittest.TestCase):
         self.git(upstream, "add", "-A")
         self.git(upstream, "commit", "-q", "-m", message)
 
-    def readme_configuration(self, plugin=None):
-        # The README's configuration, with PLUGIN on its plugin line, or
-        # without that line. TPM reads plugin names from the user's
-        # configuration file.
+    def readme_block(self, heading, language):
+        # The first LANGUAGE code block in the README section HEADING.
         readme = (ROOT / "README.md").read_text()
-        configuration = readme.split("```tmux\n", 1)[1].split("```", 1)[0]
+        section = readme.split(f"\n### {heading}\n", 1)[1].split("\n### ", 1)[0]
+        return section.split(f"```{language}\n", 1)[1].split("```", 1)[0]
+
+    def readme_configuration(self, plugin=None, config=None, plugins=None):
+        # The README's TPM configuration, with PLUGIN on its plugin line, or
+        # without that line, in CONFIG. TPM reads plugin names from the user's
+        # configuration file. With PLUGINS, the configuration runs TPM from
+        # there, as the README says to keep one's own run line.
+        configuration = self.readme_block("With TPM", "tmux")
         line = "set -g @plugin 'kallisti-dev/tmux-agent-resurrect'\n"
         self.assertIn(line, configuration)
-        config = self.home / ".tmux.conf"
-        config.write_text(
-            configuration.replace(
-                line, f"set -g @plugin '{plugin}'\n" if plugin else ""
-            )
+        configuration = configuration.replace(
+            line, f"set -g @plugin '{plugin}'\n" if plugin else ""
         )
+        if plugins:
+            run = "run '~/.tmux/plugins/tpm/tpm'"
+            self.assertIn(run, configuration)
+            configuration = configuration.replace(
+                run, f"run {shlex.quote(str(plugins / 'tpm/tpm'))}"
+            )
+        config = config or self.home / ".tmux.conf"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(configuration)
         return config
 
     @unittest.skipUnless(TPM and RESURRECT, "TPM_SOURCE and RESURRECT_SOURCE are set")
     @unittest.skipIf(TMUX_PLUGIN != ROOT, "TPM installs from a Git repository")
     @unittest.skipIf(system_plugins(), "TPM also reads @plugin lines in /etc/tmux.conf")
     def test_tpm_installs_updates_and_cleans_the_readme_configuration(self):
-        plugins = self.install_tpm()
+        self.check_tpm_lifecycle()
+
+    @unittest.skipUnless(TPM and RESURRECT, "TPM_SOURCE and RESURRECT_SOURCE are set")
+    @unittest.skipIf(TMUX_PLUGIN != ROOT, "TPM installs from a Git repository")
+    @unittest.skipIf(system_plugins(), "TPM also reads @plugin lines in /etc/tmux.conf")
+    def test_tpm_installs_beside_a_configuration_in_the_xdg_directory(self):
+        tmux = self.home / ".config/tmux"
+        self.check_tpm_lifecycle(tmux / "tmux.conf", tmux / "plugins")
+
+    def check_tpm_lifecycle(self, config=None, plugins=None):
+        # Install, update, and clean the plugin with TPM, from the README's
+        # configuration in CONFIG, with TPM and its plugins in PLUGINS.
+        directory = self.install_tpm(plugins)
         upstream = self.upstream("tmux-agent-resurrect")
         self.copy_plugin(upstream)
         self.commit(upstream, "Release")
-        config = self.readme_configuration(upstream)
+        config = self.readme_configuration(upstream, config, plugins)
         self.tmux("source-file", str(config))
-        self.run_with_git(plugins / "tpm/bin/install_plugins")
+        self.run_with_git(directory / "tpm/bin/install_plugins")
         self.tmux("source-file", str(config))
-        installed = plugins / "tmux-agent-resurrect"
+        installed = directory / "tmux-agent-resurrect"
         self.assertEqual(self.plugin_dirs(), str(installed))
         save = self.global_option("@resurrect-hook-post-save-layout")
         self.assertIn(str(installed / "bin/tmux-agent-resurrect-save"), save)
 
         (upstream / "UPDATED").touch()
         self.commit(upstream, "Update")
-        self.run_with_git(plugins / "tpm/bin/update_plugins", "tmux-agent-resurrect")
+        self.run_with_git(directory / "tpm/bin/update_plugins", "tmux-agent-resurrect")
         self.assertTrue((installed / "UPDATED").is_file())
         self.tmux("source-file", str(config))
         self.assertEqual(self.plugin_dirs(), str(installed))
         self.assertEqual(self.global_option("@resurrect-hook-post-save-layout"), save)
 
-        self.readme_configuration()
-        self.run_with_git(plugins / "tpm/bin/clean_plugins")
+        self.readme_configuration(config=config, plugins=plugins)
+        self.run_with_git(directory / "tpm/bin/clean_plugins")
         self.assertFalse(installed.exists())
         self.tmux("source-file", str(config))
         self.write_snapshot()
         original = self.snapshot.read_bytes()
         self.execute_resurrect_hook("post-save-layout", self.snapshot)
         self.assertEqual(self.snapshot.read_bytes(), original)
+
+    @unittest.skipUnless(RESURRECT, "RESURRECT_SOURCE is supplied by Nix")
+    @unittest.skipIf(TMUX_PLUGIN != ROOT, "the README clones the Git repository")
+    def test_readme_manual_installation_loads_and_updates_a_clone(self):
+        upstream = self.upstream("tmux-agent-resurrect")
+        self.copy_plugin(upstream)
+        self.commit(upstream, "Release")
+        url = "https://github.com/kallisti-dev/tmux-agent-resurrect"
+        clone = self.readme_block("Manual installation", "sh")
+        words = shlex.split(clone)
+        self.assertEqual(words[:3], ["git", "clone", url])
+        # The README's commands run in a shell, which expands ~ to HOME.
+        self.run_with_git(BASH, "-c", clone.replace(url, shlex.quote(str(upstream))))
+        installed = self.home / words[3].removeprefix("~/")
+        config = self.home / ".tmux.conf"
+        config.write_text(
+            f"run-shell {shlex.quote(str(Path(RESURRECT) / 'resurrect.tmux'))}\n"
+            + self.readme_block("Manual installation", "tmux")
+        )
+        self.tmux("source-file", str(config))
+        self.assertEqual(self.global_option("@agent-resurrect-dir"), str(installed))
+        self.assertEqual(self.plugin_dirs(), str(installed))
+        save = self.global_option("@resurrect-hook-post-save-layout")
+        self.assertIn(str(installed / "bin/tmux-agent-resurrect-save"), save)
+
+        (upstream / "UPDATED").touch()
+        self.commit(upstream, "Update")
+        self.run_with_git(BASH, "-c", self.readme_block("Updating", "sh"))
+        self.assertTrue((installed / "UPDATED").is_file())
+        self.assertEqual(self.plugin_dirs(), str(installed))
+        self.assertEqual(self.global_option("@resurrect-hook-post-save-layout"), save)
+
+    @unittest.skipUnless(
+        OH_MY_TMUX and TPM and RESURRECT,
+        "OH_MY_TMUX_SOURCE, TPM_SOURCE, and RESURRECT_SOURCE are set",
+    )
+    @unittest.skipIf(system_plugins(), "TPM also reads @plugin lines in /etc/tmux.conf")
+    def test_oh_my_tmux_loads_the_readme_plugin_lines_from_its_local_configuration(
+        self,
+    ):
+        # Oh my tmux! runs TPM in the background for the @plugin lines in
+        # .tmux.conf.local. Installed copies stand in for its downloads.
+        plugins = self.install_tpm()
+        installed = plugins / "tmux-agent-resurrect"
+        self.copy_plugin(installed)
+        lines = [
+            line
+            for line in self.readme_block("With TPM", "tmux").splitlines()
+            if "@plugin" in line and "tmux-plugins/tpm" not in line
+        ]
+        self.assertEqual(len(lines), 2)
+        local = (Path(OH_MY_TMUX) / ".tmux.conf.local").read_text()
+        for event in ["launch", "reload"]:
+            setting = f"tmux_conf_update_plugins_on_{event}="
+            self.assertIn(setting + "true", local)
+            local = local.replace(setting + "true", setting + "false")
+        (self.home / ".tmux.conf.local").write_text(local + "\n".join(lines) + "\n")
+        config = self.home / ".tmux.conf"
+        shutil.copyfile(Path(OH_MY_TMUX) / ".tmux.conf", config)
+        # It checks whether GitHub is reachable even when it doesn't update.
+        curl = self.stubdir / "curl"
+        curl.write_text("#!/bin/sh\nexit 1\n")
+        curl.chmod(0o755)
+        self.tmux("set-environment", "-g", "GIT_ALLOW_PROTOCOL", "file")
+        self.tmux("source-file", str(config))
+        wait_until(
+            lambda: self.global_option("@agent-resurrect-dir") == str(installed),
+            "Oh my tmux! did not load the plugin",
+            30,
+        )
+        # Cleanup would race the rest of its background job.
+        wait_until(
+            lambda: not self.tmux("show", "-sqv", "@__apply_plugins").stdout.strip(),
+            "Oh my tmux! did not finish loading plugins",
+            30,
+        )
+        self.assertTrue(self.global_option("@resurrect-save-script-path"))
+        self.assertEqual(self.plugin_dirs(), str(installed))
+        save = self.global_option("@resurrect-hook-post-save-layout")
+        self.assertIn(str(installed / "bin/tmux-agent-resurrect-save"), save)
 
     @unittest.skipUnless(
         TPM and RESURRECT and FORMER,

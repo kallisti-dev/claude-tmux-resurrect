@@ -9,12 +9,12 @@ session ID and prepare the command needed to resume it.
 The repository is a tmux plugin that is also a Claude Code plugin and holds an
 OpenCode plugin. tmux runs `tmux-agent-resurrect.tmux`, through TPM or
 `run-shell`, which runs setup. Setup registers the resurrect and tmux
-callbacks. When the plugin directory also holds `hooks/hooks.json`, as a TPM
-clone does, setup adds the directory to `CLAUDE_CODE_PLUGIN_DIRS` in tmux's
-global environment. Claude Code loads each directory listed in that variable in
-place, as a session-only plugin, so Claude sessions started in new panes run
-`hooks/hooks.json` from the same directory as the tmux callbacks, and both come
-from the same files.
+callbacks. When the plugin directory also holds `hooks/hooks.json`, as a clone
+of this repository does, setup adds the directory to `CLAUDE_CODE_PLUGIN_DIRS`
+in tmux's global environment. Claude Code loads each directory listed in that
+variable in place, as a session-only plugin, so Claude sessions started in new
+panes run `hooks/hooks.json` from the same directory as the tmux callbacks, and
+both come from the same files.
 
 When the directory holds `opencode/tmux-agent-resurrect.js`, setup also adds
 that file to the plugin list in tmux's global `OPENCODE_CONFIG_CONTENT`,

@@ -11,6 +11,10 @@
       url = "github:tmux-plugins/tpm";
       flake = false;
     };
+    oh-my-tmux = {
+      url = "github:gpakosz/.tmux";
+      flake = false;
+    };
     # The last version of this plugin under its former name, whose state the
     # tests upgrade.
     claude-tmux-resurrect = {
@@ -24,6 +28,7 @@
       nixpkgs,
       resurrect,
       tpm,
+      oh-my-tmux,
       claude-tmux-resurrect,
       ...
     }:
@@ -57,6 +62,8 @@
               gnugrep
               gawk
               findutils
+              # Oh my tmux! finds plugin lines with Perl.
+              perl
             ]
             ++ lib.optionals stdenv.hostPlatform.isLinux [ procps ];
           qualityTools = with pkgs; [
@@ -106,6 +113,7 @@
             chmod -R u+w "$TMPDIR/resurrect" "$TMPDIR/tpm" "$TMPDIR/claude-tmux-resurrect"
             patchShebangs --build "$TMPDIR/resurrect" "$TMPDIR/tpm" "$TMPDIR/claude-tmux-resurrect"
             export RESURRECT_SOURCE="$TMPDIR/resurrect" TPM_SOURCE="$TMPDIR/tpm"
+            export OH_MY_TMUX_SOURCE=${oh-my-tmux}
             export CLAUDE_TMUX_RESURRECT_SOURCE="$TMPDIR/claude-tmux-resurrect"
             python3 -m unittest discover -s tests -v -f
           '';
@@ -179,6 +187,7 @@
               ];
             RESURRECT_SOURCE = "${resurrect}";
             TPM_SOURCE = "${tpm}";
+            OH_MY_TMUX_SOURCE = "${oh-my-tmux}";
             CLAUDE_TMUX_RESURRECT_SOURCE = "${claude-tmux-resurrect}";
           };
           formatter = pkgs.nixfmt;

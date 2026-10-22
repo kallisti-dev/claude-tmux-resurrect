@@ -17,8 +17,12 @@ A tmux plugin that restores Claude Code and OpenCode conversations with
 
 ## Installation
 
-Add the plugin to your tmux configuration after tmux-resurrect, and before
-tmux-continuum if you use it:
+Load the plugin after tmux-resurrect, and before tmux-continuum if you use it.
+Set any `@resurrect-hook-*` options before the plugin loads.
+
+### With TPM
+
+Add the plugin to your tmux configuration:
 
 ```tmux
 set -g @plugin 'tmux-plugins/tpm'
@@ -29,12 +33,41 @@ set -g @plugin 'kallisti-dev/tmux-agent-resurrect'
 run '~/.tmux/plugins/tpm/tpm'
 ```
 
-Set any `@resurrect-hook-*` options before TPM's `run` line, then press
-prefix + I to install the plugin.
+Then press prefix + I to install the plugin. If your TPM is somewhere else,
+such as in `~/.config/tmux/plugins` or where a package manager installed it,
+keep your own `run` line. TPM-compatible managers such as
+[tpack](https://github.com/tmuxpack/tpack) read the same plugin lines.
 
-Each time tmux loads the plugin, it registers its resurrect callbacks alongside
-existing ones and lists its agent plugins in tmux's global environment, so
-agents started in new panes load them from the plugin directory:
+With [Oh my tmux!](https://github.com/gpakosz/.tmux), add the tmux-resurrect
+and tmux-agent-resurrect `@plugin` lines to `.tmux.conf.local`. Oh my tmux!
+runs TPM itself, so leave out TPM's own lines.
+
+### Manual installation
+
+Clone the repository outside TPM's plugin directory, where TPM's clean command
+removes plugins that have no `@plugin` line:
+
+```sh
+git clone https://github.com/kallisti-dev/tmux-agent-resurrect ~/clone/path
+```
+
+Add this line to your tmux configuration after the line that loads
+tmux-resurrect, then reload the configuration, for example with
+`tmux source-file ~/.tmux.conf`:
+
+```tmux
+run-shell ~/clone/path/tmux-agent-resurrect.tmux
+```
+
+To use a release instead of the `main` branch, add its tag to the clone
+command, as in `git clone --branch v0.1.0`.
+
+### Agents in new panes
+
+With TPM or a clone, each time tmux loads the plugin, it registers its
+resurrect callbacks alongside existing ones and lists its agent plugins in
+tmux's global environment, so agents started in new panes load them from the
+plugin directory:
 
 - Claude Code loads the directory listed in `CLAUDE_CODE_PLUGIN_DIRS` as the
   session-only plugin `tmux-resurrect@inline`.
@@ -45,13 +78,77 @@ Nothing is installed into either agent's configuration. Panes opened before the
 plugin first loaded don't have these variables, so agent sessions started in
 them are not tracked. Start those sessions again in a new pane, for example
 with `claude --continue`, then make a fresh resurrect save. After the next tmux
-server start, every pane has the variables.
+server start, every pane has the variables, except with Oh my tmux!, which
+loads plugins after tmux creates the first session, so that session's first
+pane never has them.
 
 If your shell startup files set `CLAUDE_CODE_PLUGIN_DIRS` or
 `OPENCODE_CONFIG_CONTENT`, add to the inherited value instead of replacing it:
 
 ```sh
 export CLAUDE_CODE_PLUGIN_DIRS="${CLAUDE_CODE_PLUGIN_DIRS:+$CLAUDE_CODE_PLUGIN_DIRS:}$HOME/my-plugins"
+```
+
+### Nix
+
+The flake provides the tmux plugin and each agent's plugin as separate
+packages, each with its runtime dependencies wrapped in:
+
+- `tmux-plugin`, built with nixpkgs' `tmuxPlugins.mkTmuxPlugin`
+- `claude-plugin`, the Claude Code plugin with the session hooks and
+  `/tmux-resurrect:check`
+- `opencode-plugin`, whose `opencode/tmux-agent-resurrect.js` is the OpenCode
+  plugin
+
+Install each where you configure that program. With Home Manager:
+
+```nix
+{ inputs, pkgs, ... }:
+let
+  tmux-agent-resurrect = inputs.tmux-agent-resurrect.packages.${pkgs.stdenv.hostPlatform.system};
+in
+{
+  programs.tmux.plugins = [
+    pkgs.tmuxPlugins.resurrect
+    tmux-agent-resurrect.tmux-plugin
+  ];
+  programs.claude-code.plugins.tmux-resurrect = tmux-agent-resurrect.claude-plugin;
+  programs.opencode.settings.plugin = [
+    "${tmux-agent-resurrect.opencode-plugin}/opencode/tmux-agent-resurrect.js"
+  ];
+}
+```
+
+Home Manager links the Claude plugin into Claude Code's `skills` directory,
+where Claude Code 2.1.157 or newer loads it in every session, and lists the
+OpenCode plugin in OpenCode's configuration file. The tmux plugin then leaves
+`CLAUDE_CODE_PLUGIN_DIRS` and `OPENCODE_CONFIG_CONTENT` alone, so restarting an
+agent in any pane loads its plugin. Without Home Manager, link the Claude plugin
+package to `~/.claude/skills/tmux-resurrect` and list the OpenCode plugin file
+in the `plugin` list of OpenCode's `opencode.json` yourself.
+
+NixOS's `programs.tmux.plugins` takes the same tmux plugin. nix-darwin's
+`programs.tmux` has no plugin list, so run each plugin's `rtp` script from its
+`extraConfig` instead:
+
+```nix
+programs.tmux.extraConfig = ''
+  run-shell ${pkgs.tmuxPlugins.resurrect.rtp}
+  run-shell ${tmux-agent-resurrect.tmux-plugin.rtp}
+'';
+```
+
+Home Manager and NixOS load tmux plugins before `programs.tmux.extraConfig`,
+so set any `@resurrect-hook-*` options in a plugin entry's `extraConfig` with
+Home Manager, or in `programs.tmux.extraConfigBeforePlugins` with NixOS.
+
+Without flakes, `default.nix` builds the same packages with the nixpkgs
+revision pinned in `flake.lock`, or with a `pkgs` argument you pass:
+
+```nix
+tmux-agent-resurrect = import (builtins.fetchTarball
+  "https://github.com/kallisti-dev/tmux-agent-resurrect/archive/main.tar.gz") { inherit pkgs; };
+# Then use tmux-agent-resurrect.tmux-plugin, .claude-plugin, and .opencode-plugin.
 ```
 
 ### Checking the setup
@@ -64,19 +161,20 @@ check directly. The plugin records its directory in a tmux option:
 "$(tmux show-options -gqv @agent-resurrect-dir)"/bin/tmux-agent-resurrect-check
 ```
 
-### Without TPM
-
-Clone this repository, then run its entry point from your tmux configuration
-after any `@resurrect-hook-*` options:
-
-```tmux
-run-shell ~/path/to/tmux-agent-resurrect/tmux-agent-resurrect.tmux
-```
-
 ### Updating
 
-Press prefix + U to update plugins with TPM. Claude Code runs the plugin's hooks
-from the same directory, so there is nothing to update separately.
+With TPM, press prefix + U, or prefix + u with Oh my tmux!. For a clone, pull
+the changes and reload the configuration:
+
+```sh
+git -C ~/clone/path pull
+tmux source-file ~/.tmux.conf
+```
+
+With Nix, update the flake input, for example with
+`nix flake update tmux-agent-resurrect`, switch to the new configuration, and
+reload tmux's configuration. The agents load their plugins from the same
+installation, so there is nothing to update separately.
 
 TPM follows the `main` branch. To stay on a release instead, add its tag to the
 plugin line:
@@ -85,7 +183,11 @@ plugin line:
 set -g @plugin 'kallisti-dev/tmux-agent-resurrect#v0.1.0'
 ```
 
-TPM doesn't move a pinned tag, so change the tag to upgrade.
+prefix + U leaves a pinned plugin at its tag, and TPM doesn't reinstall a
+plugin whose tag changed. To upgrade, change the tag, delete the plugin directory,
+which `tmux show-options -gqv @agent-resurrect-dir` prints, and press
+prefix + I. For a clone of a release, fetch the new tag and check it out instead
+of pulling.
 
 ### Upgrading from claude-tmux-resurrect
 
@@ -110,11 +212,13 @@ own. With Nix, point the flake input at
 
 ### Uninstalling
 
-Remove the `@plugin` line and press prefix + alt + u. After TPM deletes the
-plugin, the callbacks it registered do nothing; they and its
-`CLAUDE_CODE_PLUGIN_DIRS` entry disappear when the tmux server exits. To clear
-them from a running server instead, run this inside it before removing the
-plugin:
+With TPM or Oh my tmux!, remove the `@plugin` line and press prefix + alt + u.
+For a clone, remove its `run-shell` line and delete the clone. With Nix, remove
+the packages from your configuration and switch to it. The callbacks the plugin
+registered stay in the running tmux server and do nothing once its files are
+deleted; they and its `CLAUDE_CODE_PLUGIN_DIRS` entry disappear when the server
+exits. To clear them from a running server instead, run this inside it before
+removing the plugin:
 
 ```sh
 "$(tmux show-options -gqv @agent-resurrect-dir)"/bin/tmux-agent-resurrect-setup --remove
@@ -183,58 +287,6 @@ can use different configuration directories. Use an absolute path; a session
 with a relative one is restored as one saved by an earlier version of the
 plugin, which uses the `CLAUDE_CONFIG_DIR` in tmux's global environment, where
 the save and restore callbacks run.
-
-## Nix
-
-The flake provides the tmux plugin and each agent's plugin as separate
-packages, each with its runtime dependencies wrapped in:
-
-- `tmux-plugin`, built with nixpkgs' `tmuxPlugins.mkTmuxPlugin`
-- `claude-plugin`, the Claude Code plugin with the session hooks and
-  `/tmux-resurrect:check`
-- `opencode-plugin`, whose `opencode/tmux-agent-resurrect.js` is the OpenCode
-  plugin
-
-Install each where you configure that program. With Home Manager:
-
-```nix
-{ inputs, pkgs, ... }:
-let
-  tmux-agent-resurrect = inputs.tmux-agent-resurrect.packages.${pkgs.stdenv.hostPlatform.system};
-in
-{
-  programs.tmux.plugins = [
-    pkgs.tmuxPlugins.resurrect
-    tmux-agent-resurrect.tmux-plugin
-  ];
-  programs.claude-code.plugins.tmux-resurrect = tmux-agent-resurrect.claude-plugin;
-  programs.opencode.settings.plugin = [
-    "${tmux-agent-resurrect.opencode-plugin}/opencode/tmux-agent-resurrect.js"
-  ];
-}
-```
-
-Home Manager links the Claude plugin into Claude Code's `skills` directory,
-where Claude Code 2.1.157 or newer loads it in every session, and lists the
-OpenCode plugin in OpenCode's configuration file. The tmux plugin then leaves
-`CLAUDE_CODE_PLUGIN_DIRS` and `OPENCODE_CONFIG_CONTENT` alone, so restarting an
-agent in any pane loads its plugin. Without Home Manager, link the Claude plugin
-package to `~/.claude/skills/tmux-resurrect` and list the OpenCode plugin file
-in the `plugin` list of OpenCode's `opencode.json` yourself. NixOS's
-`programs.tmux.plugins` takes the same tmux plugin.
-
-Both modules load tmux plugins before `programs.tmux.extraConfig`, so set any
-`@resurrect-hook-*` options in a plugin entry's `extraConfig` with Home
-Manager, or in `programs.tmux.extraConfigBeforePlugins` with NixOS.
-
-Without flakes, `default.nix` builds the same packages with the nixpkgs
-revision pinned in `flake.lock`, or with a `pkgs` argument you pass:
-
-```nix
-tmux-agent-resurrect = import (builtins.fetchTarball
-  "https://github.com/kallisti-dev/tmux-agent-resurrect/archive/main.tar.gz") { inherit pkgs; };
-# Then use tmux-agent-resurrect.tmux-plugin, .claude-plugin, and .opencode-plugin.
-```
 
 ## Development
 

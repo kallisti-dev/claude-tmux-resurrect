@@ -24,10 +24,10 @@ line. Inspect the current pane:
 tmux show-options -pqv @agent-resurrect-session
 ```
 
-An empty value means Claude's session hook has not run in that pane. With TPM,
-Claude loads the hook only when the pane's environment lists the plugin
-directory, which is true of panes opened after the plugin loaded. Check in the
-pane's shell:
+An empty value means Claude's session hook has not run in that pane. With TPM
+or a clone, Claude loads the hook only when the pane's environment lists the
+plugin directory, which is true of panes opened after the plugin loaded. Check
+in the pane's shell:
 
 ```sh
 printenv CLAUDE_CODE_PLUGIN_DIRS
@@ -38,9 +38,9 @@ or as `tmux-resurrect@skills-dir` for the Nix Claude plugin installed with Home
 Manager. Start or resume Claude where it loads the plugin, then save again.
 
 OpenCode records a session only once it has had a prompt, and a save skips a
-recorded OpenCode session unless the pane is still running OpenCode. With TPM,
-OpenCode loads the plugin when the pane's `OPENCODE_CONFIG_CONTENT` lists
-`opencode/tmux-agent-resurrect.js` in the plugin directory:
+recorded OpenCode session unless the pane is still running OpenCode. With TPM
+or a clone, OpenCode loads the plugin when the pane's `OPENCODE_CONFIG_CONTENT`
+lists `opencode/tmux-agent-resurrect.js` in the plugin directory:
 
 ```sh
 printenv OPENCODE_CONFIG_CONTENT

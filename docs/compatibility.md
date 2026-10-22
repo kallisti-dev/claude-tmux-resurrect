@@ -4,7 +4,12 @@
 
 The flake supports Apple Silicon macOS and Linux (`aarch64-darwin`,
 `aarch64-linux`, and `x86_64-linux`). Its pinned nixpkgs does not support Intel
-macOS; the TPM installation is untested there.
+macOS; installing with TPM or a clone is untested there.
+
+TPM 3.0.0, which Debian 12 and Ubuntu 22.04 package, reads only
+`~/.tmux.conf` and cannot install a plugin line with a tag. Oh my tmux! loads
+plugins after tmux creates the first session, so agents started in that
+session's first pane are not tracked, as the plugin reports when it loads.
 
 One foreground agent conversation per pane is supported. Fish, Nushell, native
 Windows, and remote agent processes are unsupported. Linux under WSL2 is
@@ -18,7 +23,7 @@ service, is unsupported. OpenCode reports a session at its first prompt, so a
 session switched to inside OpenCode is saved as the previous one until its next
 prompt.
 
-With a TPM installation, Claude Code loads the plugin's hooks through
+With TPM or a clone, Claude Code loads the plugin's hooks through
 `CLAUDE_CODE_PLUGIN_DIRS`, which requires version 2.1.280 or later; earlier
 versions ignore the variable, so their sessions are not tracked. Home Manager
 installs the Nix Claude plugin as a personal plugin, which requires 2.1.157 or
@@ -32,7 +37,10 @@ Code uses.
 
 Most tests stub the agents. They verify exact argv, cwd, hook behavior, tmux
 lifecycle, interoperability with upstream resurrect and TPM, and upgrades from
-the plugin's last version under its former name. Two tests run
+the plugin's last version under its former name. They install the plugin with
+TPM from `~/.tmux.conf` and from `~/.config/tmux/tmux.conf`, with Oh my tmux!,
+and as a clone, and load the Nix tmux package with `run-shell`, as Home Manager
+and NixOS do; tpack and nix-darwin are untested. Two tests run
 the Claude Code and OpenCode binaries from the pinned nixpkgs, without network
 access, to check that a session started in a new pane loads the plugin and
 records and clears its session ID. Claude Code loads it through
