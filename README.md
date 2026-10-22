@@ -134,7 +134,9 @@ on the first attachment or client switch. Later attachments do not relaunch them
 
 The plugin reports problems in tmux's message line: for example, when a save
 finds Claude running in a pane without a recorded session ID, or a restore
-cannot resume a saved session.
+cannot resume a saved session. A session whose directory does not exist, as on
+a drive that is not mounted yet, resumes on an attach once it does; close its
+pane to discard it.
 
 Claude Code sessions resume with `claude --resume SESSION_ID`. For a named
 worktree at `<repo>/.claude/worktrees/<name>`, the command is run from `<repo>`

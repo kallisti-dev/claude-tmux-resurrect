@@ -333,8 +333,11 @@ worktree_name() {
 # Usage: resume_command RECORD
 # Print the command line that resumes RECORD's conversation from a pane's
 # shell. Warn and fail without output if the record is invalid or
-# inconsistent, or its directory no longer exists. Deliberately no picker
-# fallback: restoration must identify one exact session.
+# inconsistent, or its session cannot be resumed. Fail with status 2 instead
+# while a directory it needs does not exist, as when it is on a volume that is
+# not mounted yet; the warning then names that directory, after "does not
+# exist: ". Deliberately no picker fallback: restoration must identify one
+# exact session.
 resume_command() {
   local record=$1 agent
   valid_record "$record" || {
@@ -350,14 +353,14 @@ resume_command() {
 
 # Usage: opencode_resume_command RECORD
 # For a valid OpenCode record: cd to the session's directory and run
-# opencode -s SESSION_ID. Fail if the directory no longer exists.
+# opencode -s SESSION_ID. Fail with status 2 if the directory does not exist.
 opencode_resume_command() {
   local dir id
   dir=$(jq -r '.cwd' <<<"$1")
   id=$(jq -r '.session_id' <<<"$1")
   [[ -d $dir ]] || {
-    warn "saved directory no longer exists: $dir"
-    return 1
+    warn "saved directory does not exist: $dir; waiting"
+    return 2
   }
   printf 'cd -- %s && opencode -s %s' "$(quote "$dir")" "$(quote "$id")"
 }
@@ -366,16 +369,30 @@ opencode_resume_command() {
 # For a valid Claude record: cd to the saved directory and run
 # claude --resume SESSION_ID, or, for a named worktree, cd to the main
 # repository and add --worktree NAME, with the session's CLAUDE_CONFIG_DIR if
-# it had one. Fail if its transcript is missing, ambiguous, or empty, or a
-# directory no longer exists.
+# it had one. Fail if its transcript is missing, ambiguous, or empty, or its
+# worktree no longer exists. Fail with status 2 if its directory, the
+# worktree's main repository, or its configuration directory does not exist.
 claude_resume_command() {
-  local record=$1 dir id worktree transcript root config claude=claude
+  local record=$1 dir id worktree projects transcript root config claude=claude
   dir=$(jq -r '.cwd' <<<"$record")
   id=$(jq -r '.session_id' <<<"$record")
   worktree=$(jq -r '.worktree' <<<"$record")
   config=$(jq -r '.config_dir // ""' <<<"$record")
   [[ -z $config ]] || claude="CLAUDE_CONFIG_DIR=$(quote "$config") claude"
-  transcript=$(find_transcript "$id" "$(claude_projects_dir "$record")") || {
+  [[ $worktree == "$(worktree_name "$dir")" ]] || {
+    warn "inconsistent worktree metadata for $id; skipping"
+    return 1
+  }
+  [[ $worktree != . && $worktree != .. && $worktree != -* ]] || {
+    warn 'invalid worktree name; skipping'
+    return 1
+  }
+  projects=$(claude_projects_dir "$record")
+  [[ -d $projects ]] || {
+    warn "Claude configuration directory does not exist: ${projects%/projects}; waiting"
+    return 2
+  }
+  transcript=$(find_transcript "$id" "$projects") || {
     warn "missing or ambiguous transcript for $id; skipping"
     return 1
   }
@@ -383,26 +400,24 @@ claude_resume_command() {
     warn "empty transcript for $id; skipping"
     return 1
   }
-  [[ -d $dir ]] || {
-    warn "saved directory no longer exists: $dir"
-    return 1
-  }
-  [[ $worktree == "$(worktree_name "$dir")" ]] || {
-    warn "inconsistent worktree metadata for $id; skipping"
-    return 1
-  }
   if [[ -n $worktree ]]; then
-    [[ $worktree != . && $worktree != .. && $worktree != -* ]] || {
-      warn 'invalid worktree name; skipping'
-      return 1
-    }
     root=${dir%%/.claude/worktrees/*}
     [[ -d $root ]] || {
-      warn "main repository no longer exists: $root"
+      warn "main repository does not exist: $root; waiting"
+      return 2
+    }
+    # Worktrees are routinely removed, so one missing from an existing
+    # repository is gone.
+    [[ -d $dir ]] || {
+      warn "worktree no longer exists: $dir; skipping"
       return 1
     }
     printf 'cd -- %s && %s --resume %s --worktree %s' "$(quote "$root")" "$claude" "$(quote "$id")" "$(quote "$worktree")"
   else
+    [[ -d $dir ]] || {
+      warn "saved directory does not exist: $dir; waiting"
+      return 2
+    }
     printf 'cd -- %s && %s --resume %s' "$(quote "$dir")" "$claude" "$(quote "$id")"
   fi
 }

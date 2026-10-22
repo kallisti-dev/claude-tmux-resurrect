@@ -59,8 +59,10 @@ tmux show-options -gqv @agent-resurrect-restoring
 ```
 
 Run `"$plugin"/bin/tmux-agent-resurrect-post-restore` inside tmux and check its
-stderr. Missing transcripts, deleted directories, ambiguous IDs, and invalid
-metadata produce diagnostics and are skipped.
+stderr. Missing transcripts, removed worktrees, ambiguous IDs, and invalid
+metadata produce diagnostics and are skipped. A session whose directory does
+not exist waits for it: it resumes on an attach once the directory exists, and
+saves keep it until then. To discard it instead, close its pane.
 
 ## Restore was interrupted
 

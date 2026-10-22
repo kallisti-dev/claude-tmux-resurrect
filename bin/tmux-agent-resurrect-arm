@@ -50,11 +50,18 @@ while IFS= read -r pane; do
     remaining=1
     continue
   fi
-  if ! cmd=$(resume_command "$record"); then
+  status=0
+  cmd=$(resume_command "$record") || status=$?
+  if [[ $status == 2 ]]; then
+    # It waits for a directory, which restore reported.
+    remaining=1
+    continue
+  elif [[ $status != 0 ]]; then
     tmux set-option -pu -t "$pane" @agent-resurrect-resume-cmd
     tmux set-option -pu -t "$pane" @agent-resurrect-resume-data
     continue
   fi
+  tmux set-option -p -t "$pane" @agent-resurrect-resume-cmd "$cmd"
   # Literal mode prevents tmux interpreting command text as key names.
   tmux send-keys -l -t "$pane" "$cmd"
   tmux send-keys -t "$pane" Enter

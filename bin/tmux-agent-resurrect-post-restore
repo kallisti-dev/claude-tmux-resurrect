@@ -7,12 +7,14 @@ source "${BASH_SOURCE[0]%/*}/../lib/tmux-agent-resurrect.sh"
 require_tmux
 need mktemp rm cat
 [[ $# -le 1 ]] || die 'usage: tmux-agent-resurrect-post-restore [SNAPSHOT]'
-# Collects why sessions were skipped, for one summary at the end.
+# Collect why sessions were skipped or wait, for one summary at the end.
 reasons=$(mktemp "${TMPDIR:-/tmp}/tmux-agent-resurrect.XXXXXX")
+waits=$(mktemp "${TMPDIR:-/tmp}/tmux-agent-resurrect.XXXXXX")
+diagnostic=$(mktemp "${TMPDIR:-/tmp}/tmux-agent-resurrect.XXXXXX")
 # Resurrect navigates through sessions while restoring its layout. Stage only
 # after that navigation, and suppress attach hooks until all panes are ready.
 tmux set-option -g @agent-resurrect-restoring 1
-trap 'tmux set-option -gu @agent-resurrect-restoring; rm -f -- "$reasons"' EXIT
+trap 'tmux set-option -gu @agent-resurrect-restoring; rm -f -- "$reasons" "$waits" "$diagnostic"' EXIT
 snapshot=${1:-$(last_snapshot)}
 # A new restore replaces the pending set, including when choosing an older
 # snapshot that has no mapping for a previously queued pane. Panes already
@@ -29,7 +31,7 @@ done < <(tmux list-sessions -F '#{session_id}')
   warn "snapshot not found: $snapshot"
   exit 0
 }
-skipped=0
+skipped=0 waiting=0
 while IFS= read -r line; do
   if [[ $line == agent-resurrect$'\t'* ]]; then
     record=${line#*$'\t'}
@@ -49,32 +51,58 @@ while IFS= read -r line; do
   [[ -n $pane ]] || continue
   # Never inject a second resume into a live or previously launched pane.
   [[ -z $(pane_session "$pane") && -z $(pane_option "$pane" @agent-resurrect-launched) ]] || continue
-  if ! cmd=$(resume_command "$record" 2>>"$reasons"); then
+  status=0
+  cmd=$(resume_command "$record" 2>"$diagnostic") || status=$?
+  if [[ $status == 2 ]]; then
+    # Keep it queued, and so saved, until an attach finds the directory.
+    cat -- "$diagnostic" >>"$waits"
+    waiting=$((waiting + 1))
+    if [[ $waiting == 1 ]]; then
+      waiter="$(agent_label "$(jq -r '.agent' <<<"$record")") in $(tmux display-message -p -t "$pane" '#{session_name}:#{window_index}.#{pane_index}')"
+    fi
+    cmd=''
+  elif [[ $status != 0 ]]; then
+    cat -- "$diagnostic" >>"$reasons"
     skipped=$((skipped + 1))
     [[ -n ${label:-} ]] || label=$(agent_label "$(jq -r '.agent' <<<"$record")")
-    # Remove a previous pending command if its metadata has become stale.
-    tmux set-option -pu -t "$pane" @agent-resurrect-resume-cmd
-    tmux set-option -pu -t "$pane" @agent-resurrect-resume-data
     continue
   fi
   tmux set-option -p -t "$pane" @agent-resurrect-resume-data "$record"
-  tmux set-option -p -t "$pane" @agent-resurrect-resume-cmd "$cmd"
+  [[ -z $cmd ]] || tmux set-option -p -t "$pane" @agent-resurrect-resume-cmd "$cmd"
   session=$(tmux display-message -p -t "$pane" '#{session_id}')
   tmux set-option -t "$session" @agent-resurrect-pending 1
 done <"$snapshot"
 tmux set-option -gu @agent-resurrect-restoring
-trap 'rm -f -- "$reasons"' EXIT
-cat -- "$reasons" >&2
+trap 'rm -f -- "$reasons" "$waits" "$diagnostic"' EXIT
+cat -- "$reasons" "$waits" >&2
+# A later notice replaces an earlier one on attached clients, so combine them.
+notices=()
 if [[ $skipped != 0 ]]; then
   reason=''
   IFS= read -r reason <"$reasons" || true
   reason=${reason#tmux-agent-resurrect: }
   reason=${reason%; skipping}
   if [[ $skipped == 1 ]]; then
-    notify "couldn't resume a saved ${label:-agent} session: $reason"
+    notices+=("couldn't resume a saved ${label:-agent} session: $reason")
   else
-    notify "couldn't resume $skipped saved agent sessions; the first: $reason"
+    notices+=("couldn't resume $skipped saved agent sessions; the first: $reason")
   fi
+fi
+if [[ $waiting != 0 ]]; then
+  reason=''
+  IFS= read -r reason <"$waits" || true
+  missing=${reason#*does not exist: }
+  missing=${missing%; waiting}
+  if [[ $waiting == 1 ]]; then
+    notices+=("$waiter resumes once $missing exists; close the pane to discard it")
+  else
+    notices+=("$waiting saved agent sessions resume once their directories exist, the first $missing; close a pane to discard its session")
+  fi
+fi
+if [[ ${#notices[@]} == 2 ]]; then
+  notify "${notices[0]}; ${notices[1]}"
+elif [[ ${#notices[@]} == 1 ]]; then
+  notify "${notices[0]}"
 fi
 
 # display-message has a default session even without a client; use attachment

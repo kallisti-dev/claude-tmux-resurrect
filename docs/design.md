@@ -50,7 +50,11 @@ only if the ID still matches, so a delayed event cannot clear a newer
 conversation. Saving adds these mappings to the resurrect snapshot
 and blanks the generic saved agent commands to prevent a second process restart.
 When resuming, there is no fallback to a session picker: a missing or ambiguous
-transcript is skipped with a diagnostic.
+transcript is skipped with a diagnostic. A session whose directory does not
+exist may be on a volume that is not mounted yet, so it stays queued, and in
+later snapshots, until an attach finds the directory; closing its pane discards
+it. A worktree missing from an existing repository has been removed, so its
+session is skipped.
 
 OpenCode reports sessions late: a new session exists only after its first
 prompt, a session reopened with `-s` is reported at its next prompt, and an
@@ -88,6 +92,7 @@ every attached client, as well as on stderr:
 - Claude panes without a recorded session ID when saving, once each time that
   set of panes changes, because automatic saves repeat
 - saved sessions that a restore cannot resume, with the first reason
+- saved sessions that wait for their directory to exist
 - pending resumes left for a later attach because a pane is busy or in copy mode
 - a Claude session that loaded a copy of the plugin with another version
 

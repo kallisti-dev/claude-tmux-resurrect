@@ -1400,19 +1400,47 @@ class Integration(unittest.TestCase):
         self.assertIn("ambiguous", result.stderr)
         self.assertEqual(self.option("@agent-resurrect-resume-cmd"), "")
 
-    def test_missing_directory_and_empty_transcript_skip(self):
+    def test_session_waits_for_a_missing_directory(self):
         self.save()
-        self.cwd.rmdir()
+        expected = self.records()
+        # As when the directory is on a volume that is not mounted yet.
+        unmounted = self.home / "unmounted"
+        self.cwd.rename(unmounted)
+        shown = self.load_with_client()
+        result = self.script("tmux-agent-resurrect-post-restore", self.snapshot)
+        self.assertIn(f"saved directory does not exist: {self.cwd}", result.stderr)
+        self.expect_message(
+            f"Claude in work:0.0 resumes once {self.cwd} exists; close the pane"
+        )
+        self.assertNotEqual(self.option("@agent-resurrect-resume-data"), "")
+        self.write_snapshot(command="bash", full="bash")
+        self.script("tmux-agent-resurrect-save", self.snapshot)
+        self.assertEqual(self.records(), expected)
+        # An attach before it exists is quiet and launches nothing.
+        self.script("tmux-agent-resurrect-arm", self.session)
+        self.expect_no_new_messages(shown + 1)
+        self.assertEqual(self.launches(), [])
+        unmounted.rename(self.cwd)
+        self.script("tmux-agent-resurrect-arm", self.session)
+        self.assertEqual(self.expect_launches(1)[0]["cwd"], str(self.cwd.resolve()))
+
+    def test_missing_worktree_and_empty_transcript_skip(self):
+        worktree = self.cwd / ".claude/worktrees/feature"
+        worktree.mkdir(parents=True)
+        self.save(worktree)
+        worktree.rmdir()
         self.assertIn(
-            "no longer exists",
+            "worktree no longer exists",
             self.script("tmux-agent-resurrect-post-restore", self.snapshot).stderr,
         )
-        self.cwd.mkdir()
-        self.transcript().write_text("")
+        self.assertEqual(self.option("@agent-resurrect-resume-data"), "")
+        worktree.mkdir()
+        self.transcript(worktree).write_text("")
         self.assertIn(
             "empty transcript",
             self.script("tmux-agent-resurrect-post-restore", self.snapshot).stderr,
         )
+        self.assertEqual(self.option("@agent-resurrect-resume-data"), "")
 
     def test_invalid_snapshot_metadata_and_missing_panes(self):
         self.save()
