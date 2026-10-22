@@ -176,16 +176,20 @@ agent_of_pane() {
 }
 
 # Usage: read_args PID
-# Set the array process_args to the command line of process PID. Linux keeps
-# its arguments apart in /proc; elsewhere ps joins them with spaces, so they
-# are split at spaces and an argument that contains one becomes several.
+# Set the array process_args to the command line of process PID, and
+# process_args_exact to 1 if each element is exactly one of its arguments.
+# Linux keeps them apart in /proc; elsewhere ps joins them with spaces, so
+# they are split at spaces and an argument that contains one becomes several.
+# Callers read process_args_exact.
+# shellcheck disable=SC2034
 read_args() {
   local arg
-  process_args=()
+  process_args=() process_args_exact=0
   if [[ -r /proc/$1/cmdline ]]; then
     while IFS= read -r -d '' arg; do
       process_args+=("$arg")
     done <"/proc/$1/cmdline"
+    process_args_exact=1
   else
     read -ra process_args <<<"$(ps -o args= -p "$1" 2>/dev/null || true)"
   fi
@@ -352,7 +356,10 @@ valid_record() {
     (.worktree | type == "string" and (test("[\u0000-\u001f\u007f/]") | not)) and
     (.agent == "claude" or .worktree == "") and
     ((has("config_dir") | not) or
-      (.agent == "claude" and (.config_dir == "" or (.config_dir | text and startswith("/"))))))
+      (.agent == "claude" and (.config_dir == "" or (.config_dir | text and startswith("/"))))) and
+    ((has("options") | not) or
+      (.agent == "claude" and (.options | type == "array" and
+        all(.[]; type == "string" and (test("[\u0000-\u001f\u007f]") | not))))))
   ' >/dev/null 2>&1 <<<"$1"
 }
 
@@ -426,16 +433,20 @@ opencode_resume_command() {
 # For a valid Claude record: cd to the saved directory and run
 # claude --resume SESSION_ID, or, for a named worktree, cd to the main
 # repository and add --worktree NAME, with the session's CLAUDE_CONFIG_DIR if
-# it had one. Fail if its transcript is missing, ambiguous, or empty, or its
+# it had one and the options it was started with that a resume repeats. Fail
+# if its transcript is missing, ambiguous, or empty, or its
 # worktree no longer exists. Fail with status 2 if its directory, the
 # worktree's main repository, or its configuration directory does not exist.
 claude_resume_command() {
-  local record=$1 dir id worktree projects transcript root config claude=claude
+  local record=$1 dir id worktree projects transcript root config claude=claude option options=''
   dir=$(jq -r '.cwd' <<<"$record")
   id=$(jq -r '.session_id' <<<"$record")
   worktree=$(jq -r '.worktree' <<<"$record")
   config=$(jq -r '.config_dir // ""' <<<"$record")
   [[ -z $config ]] || claude="CLAUDE_CONFIG_DIR=$(quote "$config") claude"
+  while IFS= read -r option; do
+    options+=" $(quote "$option")"
+  done < <(jq -r '.options // [] | .[]' <<<"$record")
   [[ $worktree == "$(worktree_name "$dir")" ]] || {
     warn "inconsistent worktree metadata for $id; skipping"
     return 1
@@ -469,13 +480,13 @@ claude_resume_command() {
       warn "worktree no longer exists: $dir; skipping"
       return 1
     }
-    printf 'cd -- %s && %s --resume %s --worktree %s' "$(quote "$root")" "$claude" "$(quote "$id")" "$(quote "$worktree")"
+    printf 'cd -- %s && %s --resume %s --worktree %s%s' "$(quote "$root")" "$claude" "$(quote "$id")" "$(quote "$worktree")" "$options"
   else
     [[ -d $dir ]] || {
       warn "saved directory does not exist: $dir; waiting"
       return 2
     }
-    printf 'cd -- %s && %s --resume %s' "$(quote "$dir")" "$claude" "$(quote "$id")"
+    printf 'cd -- %s && %s --resume %s%s' "$(quote "$dir")" "$claude" "$(quote "$id")" "$options"
   fi
 }
 

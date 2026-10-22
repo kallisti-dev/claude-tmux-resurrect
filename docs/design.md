@@ -192,8 +192,11 @@ Each snapshot includes lines beginning `agent-resurrect`, followed by a tab and 
 object containing schema version 1, the agent (`claude`), tmux session name,
 window and pane indexes, the agent's session ID, absolute cwd, and Claude
 worktree name, which is empty for other agents. Claude records also hold the
-session's `CLAUDE_CONFIG_DIR` as `config_dir`, empty when it was unset. This
-local metadata can reveal
+session's `CLAUDE_CONFIG_DIR` as `config_dir`, empty when it was unset, and as
+`options` the arguments that the resume command repeats. Those are read from
+Claude's command line when its session starts, and include
+`--dangerously-skip-permissions` if the transcript shows that the session last
+bypassed permissions. This local metadata can reveal
 project names and paths. Snapshot files are replaced with mode 0600; use a private
 snapshot directory as well. Existing resurrect pane titles, commands, or optional
 pane-content captures may contain additional information independently of this

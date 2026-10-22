@@ -144,6 +144,14 @@ and adds `--worktree NAME`. Other sessions use the latest valid absolute `cwd`
 in their transcript, falling back to the pane's directory if there is no usable
 transcript cwd.
 
+The command repeats the options Claude was started with that resuming does not
+restore, such as `--model`, `--effort`, `--add-dir`, `--mcp-config` and
+`--settings` files, and tool lists, but not the prompt. Claude restores the
+permission mode itself, except bypassing permissions, so the command adds
+`--dangerously-skip-permissions` if the session last bypassed them. On macOS,
+the options are read from `ps`, which joins arguments with spaces, so options
+after a system prompt or another value with spaces are not repeated.
+
 OpenCode sessions resume with `opencode -s SESSION_ID`, run from the session's
 directory. OpenCode reports a session to the plugin at its first prompt, so a
 session that has had no prompt is not saved. A session you switch to inside

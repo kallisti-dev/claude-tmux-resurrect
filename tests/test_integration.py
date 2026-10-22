@@ -1679,6 +1679,95 @@ class Integration(unittest.TestCase):
             },
         )
 
+    def test_resume_repeats_the_options_claude_was_started_with(self):
+        extra = self.home / "extra dir"
+        (self.cwd / "lib").mkdir()
+        extra.mkdir()
+        mcp = self.home / "mcp.json"
+        mcp.write_text("{}")
+        # A process with Claude's command line, which the hook finds through
+        # CLAUDE_PID.
+        fake = self.base / "fake claude/claude"
+        fake.parent.mkdir()
+        fake.write_text(f"#!{PYTHON}\nimport time\ntime.sleep(60)\n")
+        fake.chmod(0o755)
+        process = subprocess.Popen(
+            [
+                str(fake),
+                "--model",
+                "claude-haiku-5-5",
+                "--add-dir",
+                str(extra),
+                "lib",
+                "--effort=low",
+                "--dangerously-skip-permissions",
+                "-c",
+                "--mcp-config",
+                str(mcp),
+                "--allowedTools",
+                "Bash(git log:*)",
+                "Edit",
+                "--strict-mcp-config",
+                "--append-system-prompt",
+                "be terse",
+                "--settings",
+                '{"model": "opus"}',
+                "explain --verbose",
+            ]
+        )
+        self.addCleanup(process.wait)
+        self.addCleanup(process.kill)
+        expected = [
+            "--model",
+            "claude-haiku-5-5",
+            "--add-dir",
+            str(extra),
+            f"{self.cwd}/lib",
+            "--effort",
+            "low",
+            "--mcp-config",
+            str(mcp),
+            "--allowedTools",
+            "Bash(git log:*)",
+            "Edit",
+            "--strict-mcp-config",
+        ]
+        # ps joins the arguments elsewhere, so the extent of text is unknown.
+        if Path("/proc/self/cmdline").exists():
+            expected += ["--append-system-prompt", "be terse"]
+        self.transcript()
+        self.script(
+            "tmux-agent-resurrect-claude-hook",
+            data=json.dumps(
+                {
+                    "hook_event_name": "SessionStart",
+                    "session_id": ID,
+                    "cwd": str(self.cwd),
+                }
+            ),
+            env=dict(self.env, CLAUDE_PID=str(process.pid)),
+        )
+        self.assertEqual(
+            json.loads(self.option("@agent-resurrect-launch"))["options"], expected
+        )
+        # Resuming restores the permission mode, except bypassing permissions.
+        with self.transcript().open("a") as stream:
+            for mode in ["plan", "bypassPermissions"]:
+                stream.write(
+                    json.dumps({"type": "permission-mode", "permissionMode": mode})
+                    + "\n"
+                )
+        self.write_snapshot()
+        self.script("tmux-agent-resurrect-save", self.snapshot)
+        expected.append("--dangerously-skip-permissions")
+        self.assertEqual(self.records()[0]["options"], expected)
+        self.hook("SessionEnd")
+        self.attach()
+        self.script("tmux-agent-resurrect-post-restore", self.snapshot)
+        self.assertEqual(
+            self.expect_launches(1)[0]["argv"], ["--resume", ID, *expected]
+        )
+
     def test_records_without_a_config_dir_use_the_server_one(self):
         # Records that earlier versions saved do not name a directory.
         self.save()

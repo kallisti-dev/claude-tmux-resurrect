@@ -41,8 +41,10 @@ the Nix packages; OpenCode through `OPENCODE_CONFIG_CONTENT` and its
 configuration file. The tests do not cover authentication, session file
 compatibility across versions, or an actual conversation resumption.
 
-The transcript directory layout and top-level `cwd` fields are an integration
-assumption and can change with Claude versions. Worktree inference covers the
+The transcript directory layout and top-level `cwd` and `permissionMode` fields
+are an integration assumption and can change with Claude versions, as can the
+command-line options that the resume command repeats, which are Claude Code
+2.1.300's. An option a later version adds ends the options that are repeated. Worktree inference covers the
 standard `.claude/worktrees/<name>` layout; it does not recreate deleted trees
 or preserve a subdirectory within a named worktree at launch.
 

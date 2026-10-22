@@ -58,15 +58,26 @@ while IFS=$'\t' read -r command full row; do
   jq -e 'type == "object"' >/dev/null 2>&1 <<<"$launch" || launch='{}'
   if [[ $agent == claude ]]; then
     if transcript=$(find_transcript "$id" "$(claude_projects_dir "$launch")"); then
-      # JSON decoding handles spaces, escaping and pretty/partially written lines.
-      last_cwd=$(jq -Rn '
-        reduce inputs as $line (null;
+      # The latest valid absolute cwd, and the latest permission mode. JSON
+      # decoding handles spaces, escaping and pretty/partially written lines.
+      latest=$(jq -cRn '
+        reduce inputs as $line ({};
           (try ($line | fromjson) catch null) as $entry |
-          if ($entry | type) == "object" and ($entry.cwd | type) == "string"
-            and ($entry.cwd | startswith("/")) then $entry.cwd else . end
-        ) | . // empty
+          if ($entry | type) != "object" then .
+          else
+            (if ($entry.cwd | type) == "string" and ($entry.cwd | startswith("/"))
+              then .cwd = $entry.cwd else . end) |
+            (if ($entry.permissionMode | type) == "string"
+              then .mode = $entry.permissionMode else . end)
+          end)
       ' "$transcript")
-      [[ -z $last_cwd ]] || dir=$(jq -r . <<<"$last_cwd")
+      last_cwd=$(jq -r '.cwd // empty' <<<"$latest")
+      [[ -z $last_cwd ]] || dir=$last_cwd
+      # Resuming restores the permission mode, except bypassing permissions,
+      # which needs the option again.
+      if [[ $(jq -r '.mode // empty' <<<"$latest") == bypassPermissions ]]; then
+        launch=$(jq -c '.options = ((.options // []) + ["--dangerously-skip-permissions"])' <<<"$launch")
+      fi
     else
       warn "no unique transcript for $id; saving pane directory as fallback"
     fi

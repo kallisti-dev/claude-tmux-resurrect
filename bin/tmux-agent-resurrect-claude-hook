@@ -15,15 +15,230 @@ jq -e '.hook_event_name == "SessionStart" or .hook_event_name == "SessionEnd"' >
 event=$(jq -r '.hook_event_name // empty' <<<"$payload")
 id=$(jq -er '.session_id | select(type == "string")' <<<"$payload") || die 'hook session_id must be a string'
 valid_id "$id" || die 'invalid hook session_id'
+
+# Usage: resolve PATH
+# Print PATH, made absolute against base if it is relative.
+resolve() {
+  if [[ $1 == /* ]]; then
+    printf '%s' "$1"
+  else
+    printf '%s/%s' "$base" "$1"
+  fi
+}
+
+# Usage: take_path TEST
+# Take the path at process_args[i], for which test TEST succeeds, and set path
+# to it, made absolute; fail if there is none. Where ps split the arguments,
+# a path that contains spaces is the longest run of words up to the next
+# option that names one.
+take_path() {
+  local count=0 k j joined
+  while ((i + count < n)) && [[ ${process_args[i + count]} != -* ]]; do
+    count=$((count + 1))
+    ((process_args_exact == 0)) || break
+  done
+  for ((k = count; k > 0; k--)); do
+    joined=${process_args[i]}
+    for ((j = 1; j < k; j++)); do
+      joined+=" ${process_args[i + j]}"
+    done
+    path=$(resolve "$joined")
+    if test "$1" "$path"; then
+      i=$((i + k))
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Usage: paren_depth TEXT
+# Print how many more opening than closing parentheses TEXT has.
+paren_depth() {
+  local opening=${1//[^(]/} closing=${1//[^)]/}
+  printf '%s' $((${#opening} - ${#closing}))
+}
+
+# Usage: launch_options
+# Set the array options to the options on Claude's command line, the process
+# CLAUDE_PID, that a resume repeats: those that configure the session, which
+# --resume does not restore. Not repeated are those that choose or create a
+# session, apply only with --print, or set the permission mode, which the
+# resumed session restores, except bypassing permissions; save adds that from
+# the transcript. Relative paths are resolved against base, the directory
+# Claude started in. Stop at the first argument whose meaning is uncertain,
+# such as an unknown option or the prompt, which is not repeated. The options
+# are Claude Code 2.1.300's.
+launch_options() {
+  local n i=-1 j arg name value kind keep inline path values word test
+  word='^[A-Za-z0-9][][A-Za-z0-9._:/@,+=-]*$'
+  options=()
+  [[ ${CLAUDE_PID:-} =~ ^[0-9]+$ ]] || return 0
+  read_args "$CLAUDE_PID"
+  n=${#process_args[@]}
+  # Options follow the program, or the script that an interpreter runs, whose
+  # path ps may have split at its spaces.
+  for ((j = 0; j < n; j++)); do
+    [[ ${process_args[j]} != -* ]] || break
+    if [[ -n $(agent_of_command "${process_args[j]##*/}") ]]; then
+      i=$((j + 1))
+      break
+    fi
+  done
+  ((i >= 0)) || return 0
+  while ((i < n)); do
+    arg=${process_args[i]}
+    i=$((i + 1))
+    name=$arg value='' inline=0
+    if [[ $arg == --*=* ]]; then
+      name=${arg%%=*} value=${arg#*=} inline=1
+    fi
+    case $name in
+      --model | --effort | --agent | --setting-sources | --autocompact) kind=word keep=1 ;;
+      --settings | --agents) kind=file keep=1 ;;
+      --plugin-dir) kind=path keep=1 ;;
+      --add-dir) kind=dirs keep=1 ;;
+      --mcp-config) kind=files keep=1 ;;
+      --tools | --allowedTools | --allowed-tools | --disallowedTools | --disallowed-tools | --betas) kind=list keep=1 ;;
+      --system-prompt | --append-system-prompt) kind=text keep=1 ;;
+      --strict-mcp-config | --chrome | --no-chrome | --ide | --verbose | --brief | --restricted | --safe-mode | --bare | \
+        --disable-slash-commands | --ax-screen-reader | --exclude-dynamic-system-prompt-sections) kind=flag keep=1 ;;
+      -c | --continue | --fork-session | -p | --print | --dangerously-skip-permissions | \
+        --allow-dangerously-skip-permissions | --bg | --background | --desktop | --tmux | --forward-subagent-text | \
+        --include-hook-events | --include-partial-messages | --no-session-persistence | --replay-user-messages) kind=flag keep=0 ;;
+      --permission-mode | --session-id | -n | --name | --debug-file | --environment | --fallback-model | --input-format | \
+        --output-format | --json-schema | --max-budget-usd | --permission-prompts | --plugin-url | \
+        --remote-control-session-name-prefix | --system-prompt-snapshot) kind=word keep=0 ;;
+      --file) kind=list keep=0 ;;
+      -r | --resume | --from-pr | --cloud | --teleport | --prompt-suggestions | --remote-control | -d | --debug | -w | \
+        --worktree) kind=optional keep=0 ;;
+      *) return 0 ;;
+    esac
+    case $kind in
+      flag)
+        if ((inline)); then
+          ((keep == 0)) || return 0
+        elif ((keep)); then
+          options+=("$name")
+        fi
+        ;;
+      optional)
+        if ((inline == 0 && i < n)) && [[ ${process_args[i]} != -* ]]; then
+          i=$((i + 1))
+        fi
+        ;;
+      word | text | file | path)
+        # Where ps split the arguments, text may have been several.
+        [[ $kind != text ]] || ((process_args_exact)) || return 0
+        if [[ $kind == path ]] && ((inline == 0)); then
+          take_path -e || return 0
+          options+=("$name" "$path")
+          continue
+        fi
+        if ((inline == 0)); then
+          ((i < n)) || return 0
+          value=${process_args[i]}
+          i=$((i + 1))
+        fi
+        ((keep)) || continue
+        case $kind in
+          word)
+            [[ $value =~ $word ]] || return 0
+            options+=("$name" "$value")
+            ;;
+          text) options+=("$name" "$value") ;;
+          path)
+            path=$(resolve "$value")
+            [[ -e $path ]] || return 0
+            options+=("$name" "$path")
+            ;;
+          file)
+            # Otherwise the value is JSON, which may hold secrets and, where
+            # ps split the arguments, may have been several.
+            path=$(resolve "$value")
+            if [[ -f $path ]]; then
+              options+=("$name" "$path")
+            else
+              ((process_args_exact)) || return 0
+            fi
+            ;;
+        esac
+        ;;
+      dirs | files)
+        test=-d
+        [[ $kind == dirs ]] || test=-f
+        values=()
+        if ((inline)); then
+          path=$(resolve "$value")
+          if test "$test" "$path"; then
+            values+=("$path")
+          else
+            ((process_args_exact)) || return 0
+          fi
+        fi
+        while ((i < n)) && [[ ${process_args[i]} != -* ]]; do
+          if take_path "$test"; then
+            values+=("$path")
+          elif ((process_args_exact)); then
+            # Claude reads it as one too; a configuration in JSON is not repeated.
+            i=$((i + 1))
+          else
+            return 0
+          fi
+        done
+        if ((${#values[@]})); then
+          options+=("$name" "${values[@]}")
+        fi
+        ;;
+      list)
+        values=()
+        if ((inline)); then
+          values+=("$value")
+        fi
+        while ((i < n)) && [[ ${process_args[i]} != -* ]]; do
+          value=${process_args[i]}
+          i=$((i + 1))
+          # Rejoin a rule that ps split at its spaces, such as Bash(git log:*).
+          while ((process_args_exact == 0 && i < n)) && (($(paren_depth "$value") > 0)); do
+            value+=" ${process_args[i]}"
+            i=$((i + 1))
+          done
+          (($(paren_depth "$value") == 0)) || return 0
+          values+=("$value")
+        done
+        ((${#values[@]})) || return 0
+        if ((keep)); then
+          options+=("$name" "${values[@]}")
+        fi
+        ;;
+    esac
+  done
+  # Snapshots cannot hold control characters.
+  for value in ${options[@]+"${options[@]}"}; do
+    if [[ $value == *[[:cntrl:]]* ]]; then
+      options=()
+      break
+    fi
+  done
+  return 0
+}
+
 case "$event" in
   SessionStart)
+    launch='{}'
     # The session's transcript is under its configuration directory, and
     # resuming it needs the same one. A relative directory was relative to a
     # directory that is not known here, so leave it out.
     config=${CLAUDE_CONFIG_DIR:-}
-    launch=''
     if [[ (-z $config || $config == /*) && $config != *[[:cntrl:]]* ]]; then
-      launch=$(jq -cn --arg config "$config" '{config_dir: $config}')
+      launch=$(jq -c --arg config "$config" '. + {config_dir: $config}' <<<"$launch")
+    fi
+    base=$(jq -r '.cwd // empty' <<<"$payload")
+    [[ $base == /* ]] || base=$PWD
+    launch_options || options=()
+    if ((${#options[@]})); then
+      # Each holds no newline, as launch_options leaves out control characters.
+      repeated=$(printf '%s\n' "${options[@]}" | jq -Rsc 'split("\n")[:-1]')
+      launch=$(jq -c --argjson options "$repeated" '. + {options: $options}' <<<"$launch")
     fi
     record_session "$TMUX_PANE" claude "$id" '' "$launch"
     # Report a Claude plugin whose version differs from the tmux plugin's: one
