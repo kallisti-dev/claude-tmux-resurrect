@@ -28,6 +28,31 @@ problem() {
 info() { printf 'info     %s\n' "$*"; }
 listed() { [[ :$1: == *:"$2":* ]]; }
 
+# Usage: ask_claude ARG...
+# Print the output of claude ARG..., failing as it fails. Give up after 10
+# seconds with status 124, since Claude may wait on something such as a login
+# or the network. The output goes through a file, because a process that
+# Claude started may keep a pipe open after Claude is killed.
+ask_claude() {
+  local output pid start=$SECONDS status=0
+  output=$(mktemp "${TMPDIR:-/tmp}/tmux-agent-resurrect-check.XXXXXX")
+  claude "$@" >"$output" 2>/dev/null &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if ((SECONDS - start >= 10)); then
+      kill -KILL "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      rm -f -- "$output"
+      return 124
+    fi
+    sleep 0.1
+  done
+  wait "$pid" || status=$?
+  cat -- "$output"
+  rm -f -- "$output"
+  return "$status"
+}
+
 need tmux
 [[ -n ${TMUX:-} ]] || die 'run inside tmux (TMUX must identify the intended server)'
 option() { tmux show-options -gqv "$1"; }
@@ -95,26 +120,37 @@ else
   fi
 fi
 
+status=0
+if command -v claude >/dev/null 2>&1; then
+  claude_version=$(ask_claude --version) || status=$?
+fi
 if ! command -v claude >/dev/null 2>&1; then
   info 'claude is not on PATH, so its version and plugin list were not checked'
+elif [[ $status == 124 ]]; then
+  problem "claude --version didn't answer within 10 seconds, so its plugins were not checked"
 else
-  claude_version=$(claude --version 2>/dev/null || true)
   claude_version=${claude_version%% *}
   if [[ -z $listing ]] || at_least "${claude_version:-0}" 2.1.280; then
     ok "Claude Code ${claude_version:-(unknown version)}"
   else
     problem "Claude Code ${claude_version:-(unknown version)} is older than 2.1.280, which loads plugins from CLAUDE_CODE_PLUGIN_DIRS"
   fi
+  status=0
   if [[ -n $listing ]]; then
     # Ask what Claude would load in a new pane.
-    plugins=$(CLAUDE_CODE_PLUGIN_DIRS=$server_dirs claude plugin list --json 2>/dev/null || true)
+    plugins=$(CLAUDE_CODE_PLUGIN_DIRS=$server_dirs ask_claude plugin list --json) || status=$?
+  elif [[ -n $dir ]]; then
+    plugins=$(ask_claude plugin list --json) || status=$?
+  fi
+  if [[ $status == 124 ]]; then
+    problem "claude plugin list didn't answer within 10 seconds"
+  elif [[ -n $listing ]]; then
     if jq -e --arg dir "$dir" 'any(.[]; .id == "tmux-resurrect@inline" and .enabled and .installPath == $dir)' >/dev/null 2>&1 <<<"$plugins"; then
       ok 'Claude Code loads the plugin as tmux-resurrect@inline'
     else
       problem "Claude Code doesn't load the plugin from $dir; see /plugin in a Claude session started in a new pane"
     fi
   elif [[ -n $dir ]]; then
-    plugins=$(claude plugin list --json 2>/dev/null || true)
     found=$(jq -r 'first(.[] | select((.id | startswith("tmux-resurrect@")) and .enabled) | "\(.version // "")\t\(.id)") // empty' 2>/dev/null <<<"$plugins" || true)
     if [[ -z $found ]]; then
       problem "Claude Code doesn't load the tmux-resurrect plugin; install the Claude plugin with the tmux plugin"

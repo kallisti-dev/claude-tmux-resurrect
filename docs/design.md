@@ -92,7 +92,9 @@ thread, where the plugin does nothing.
 The OpenCode plugin also adds the command `/tmux-resurrect-check`. When it
 runs, the plugin first records the session, since the command may be its first
 prompt, then runs `tmux-agent-resurrect-check --session ID` and appends the
-output to the command's prompt for OpenCode to explain.
+output to the command's prompt for OpenCode to explain. The check gives up on
+`claude` after 10 seconds for each command, and the plugin gives up on the
+check after 30, so the command always reaches OpenCode.
 
 ## Saving
 

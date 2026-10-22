@@ -20,6 +20,8 @@ const path = (file) => fileURLToPath(new URL(`../${file}`, import.meta.url));
 const recorder = path("bin/tmux-agent-resurrect-record");
 const checker = path("bin/tmux-agent-resurrect-check");
 const check = "tmux-resurrect-check";
+// The check gives up on each command it runs well before this.
+const checkSeconds = 30;
 
 export const TmuxAgentResurrect = async ({ client }) => {
   // The TUI runs plugins in a worker thread with the pane's environment.
@@ -42,21 +44,33 @@ export const TmuxAgentResurrect = async ({ client }) => {
     }
   };
   // Without an env option, Bun.spawn passes the environment from startup,
-  // not variables OpenCode sets later. An argv array runs no shell.
-  const run = async (argv, output = "ignore") => {
+  // not variables OpenCode sets later. An argv array runs no shell. With a
+  // limit in milliseconds, kill the process once it has run that long and
+  // resolve to null.
+  const run = async (argv, { output = "ignore", limit } = {}) => {
     const child = Bun.spawn(argv, {
       env: process.env,
       stdin: "ignore",
       stdout: output,
       stderr: output,
     });
-    const [stdout, stderr] = await Promise.all(
+    const finished = Promise.all(
       [child.stdout, child.stderr].map((stream) =>
         stream ? new Response(stream).text() : "",
       ),
-    );
-    await child.exited;
-    return stdout + stderr;
+    ).then(async ([stdout, stderr]) => {
+      await child.exited;
+      return stdout + stderr;
+    });
+    if (!limit) return finished;
+    let timer;
+    const expired = new Promise((resolve) => {
+      timer = setTimeout(resolve, limit, null);
+    });
+    const result = await Promise.race([finished, expired]);
+    clearTimeout(timer);
+    if (result === null) child.kill("SIGKILL");
+    return result;
   };
   const record = (args) => run([recorder, ...args]);
   const show = async (id) => {
@@ -87,9 +101,16 @@ export const TmuxAgentResurrect = async ({ client }) => {
     "command.execute.before": async ({ command, sessionID }, output) => {
       if (command !== check) return;
       await enqueue(() => show(sessionID));
-      const result = await run([checker, "--session", sessionID], "pipe");
+      const result = await run([checker, "--session", sessionID], {
+        output: "pipe",
+        limit: checkSeconds * 1000,
+      });
       const part = output.parts.find((part) => part.type === "text");
-      if (part) part.text += `\n\n\`\`\`\n${result.trimEnd()}\n\`\`\`\n`;
+      if (!part) return;
+      part.text +=
+        result === null
+          ? `\n\ntmux-agent-resurrect-check did not finish within ${checkSeconds} seconds.\n`
+          : `\n\n\`\`\`\n${result.trimEnd()}\n\`\`\`\n`;
     },
     event: async ({ event }) => {
       if (event.type !== "session.created" && event.type !== "session.updated") {

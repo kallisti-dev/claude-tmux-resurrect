@@ -147,7 +147,7 @@ class Integration(unittest.TestCase):
         ).stdout.strip()
         self.clients = []
 
-    def run_command(self, args, *, data=None, env=None, check=True):
+    def run_command(self, args, *, data=None, env=None, check=True, timeout=15):
         result = subprocess.run(
             args,
             input=data,
@@ -155,7 +155,7 @@ class Integration(unittest.TestCase):
             capture_output=True,
             env=self.env if env is None else env,
             cwd=ROOT,
-            timeout=15,
+            timeout=timeout,
             check=False,
         )
         if check and result.returncode:
@@ -167,14 +167,18 @@ class Integration(unittest.TestCase):
     def tmux(self, *args, **kwargs):
         return self.run_command([TMUX, "-S", str(self.socket), *args], **kwargs)
 
-    def script(self, name, *args, data=None, env=None, check=True):
+    def script(self, name, *args, data=None, env=None, check=True, timeout=15):
         # Each agent runs its recorder from its own plugin; tmux runs the rest.
         bin = {
             "tmux-agent-resurrect-claude-hook": CLAUDE_PLUGIN / "bin",
             "tmux-agent-resurrect-record": OPENCODE_PLUGIN / "bin",
         }.get(name, BIN)
         return self.run_command(
-            [str(bin / name), *map(str, args)], data=data, env=env, check=check
+            [str(bin / name), *map(str, args)],
+            data=data,
+            env=env,
+            check=check,
+            timeout=timeout,
         )
 
     def stop_server(self):
@@ -872,17 +876,20 @@ class Integration(unittest.TestCase):
         self.assertIn("install the same version of both plugins", message)
         self.assertEqual(self.option("@agent-resurrect-session"), f"claude {ID}")
 
-    def fake_claude(self, version="2.1.300", plugins=None):
-        # Answers the two commands the check runs. Without PLUGINS, it loads
-        # each directory in CLAUDE_CODE_PLUGIN_DIRS as tmux-resurrect@inline.
+    def fake_claude(self, version="2.1.300", plugins=None, hang=None):
+        # Answers the two commands the check runs, except HANG, which it never
+        # answers. Without PLUGINS, it loads each directory in
+        # CLAUDE_CODE_PLUGIN_DIRS as tmux-resurrect@inline.
         directory = self.base / "fake claude"
         directory.mkdir(exist_ok=True)
         script = directory / "claude"
         script.write_text(
             f"#!{PYTHON}\n"
-            "import json, os, sys\n"
+            "import json, os, sys, time\n"
             f"plugins = {plugins!r}\n"
-            "if sys.argv[1:] == ['--version']:\n"
+            f"if sys.argv[1:] == {hang!r}:\n"
+            "    time.sleep(120)\n"
+            "elif sys.argv[1:] == ['--version']:\n"
             f"    print({version!r} + ' (Claude Code)')\n"
             "elif sys.argv[1:] == ['plugin', 'list', '--json']:\n"
             "    if plugins is None:\n"
@@ -911,8 +918,10 @@ class Integration(unittest.TestCase):
             }
         ]
 
-    def check(self, env, *args):
-        return self.script("tmux-agent-resurrect-check", *args, env=env, check=False)
+    def check(self, env, *args, timeout=15):
+        return self.script(
+            "tmux-agent-resurrect-check", *args, env=env, check=False, timeout=timeout
+        )
 
     def test_check_reports_a_working_setup(self):
         self.tmux("set", "-g", "@resurrect-save-script-path", "/resurrect/save.sh")
@@ -952,6 +961,20 @@ class Integration(unittest.TestCase):
             ]
         for text in expected:
             self.assertIn(text, result.stdout)
+
+    def test_check_gives_up_on_a_claude_that_does_not_answer(self):
+        self.tmux("set", "-g", "@resurrect-save-script-path", "/resurrect/save.sh")
+        self.load_plugin()
+        for hang in [["--version"], ["plugin", "list", "--json"]]:
+            with self.subTest(hang=hang):
+                # The check gives up on Claude after 10 seconds.
+                result = self.check(self.fake_claude(hang=hang), timeout=40)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(
+                    f"problem  claude {' '.join(hang[:2])} didn't answer within 10 seconds",
+                    result.stdout,
+                )
+                self.assertEqual(result.stdout.count("problem  "), 1, result.stdout)
 
     def test_check_finds_claude_panes_by_their_command_line(self):
         self.load_plugin()

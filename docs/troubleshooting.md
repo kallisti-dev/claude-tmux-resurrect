@@ -118,6 +118,11 @@ or run:
 "$plugin"/bin/tmux-agent-resurrect-arm "$(tmux display-message -p '#{session_id}')"
 ```
 
+## Claude did not answer
+
+The check asks `claude` for its version and plugins, and gives up on each after
+10 seconds. Run `claude --version` in the same shell to see what it waits for.
+
 ## Dependency not found
 
 Make jq and the other named executables available on the tmux server's PATH;
