@@ -173,13 +173,9 @@ In a Claude session, run `/tmux-resurrect:check`. Claude runs the
 
 #### OpenCode
 
-OpenCode has no check command. The [manual check](#manual) reports whether new
-panes load the OpenCode plugin. OpenCode records a session at its first prompt;
-after that, the session ID is listed beside its pane:
-
-```sh
-tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{@agent-resurrect-session}'
-```
+In an OpenCode session, run `/tmux-resurrect-check`. The plugin records the
+session, adds the [manual check](#manual) for it to the prompt, and OpenCode
+explains any problem it reports.
 
 #### Manual
 

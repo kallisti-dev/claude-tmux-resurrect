@@ -9,7 +9,7 @@ plugin=$(tmux show-options -gqv @agent-resurrect-dir)
 
 Start with the check, which reports each problem it finds with a line beginning
 `problem`. In a Claude session, `/tmux-resurrect:check` runs it and explains the
-result.
+result, as `/tmux-resurrect-check` does in OpenCode.
 
 ```sh
 "$plugin"/bin/tmux-agent-resurrect-check

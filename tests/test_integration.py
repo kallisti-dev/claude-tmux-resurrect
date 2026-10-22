@@ -1731,7 +1731,7 @@ class Integration(unittest.TestCase):
         self.wait_for_exit(pane, "claude")
 
     @unittest.skipUnless(OPENCODE, "OPENCODE_BINARY is supplied by the agents check")
-    def test_real_opencode_records_and_clears_its_session(self):
+    def test_real_opencode_records_checks_and_clears_its_session(self):
         self.load_plugin()
         config = self.home / "opencode config"
         (config / "opencode").mkdir(parents=True)
@@ -1771,7 +1771,9 @@ class Integration(unittest.TestCase):
             "OPENCODE_DISABLE_AUTOUPDATE": "1",
         }.items():
             self.tmux("set-environment", "-g", name, value)
-        command = f"{shlex.quote(OPENCODE)}; sleep 60"
+        # The check asks Claude for its version and plugins.
+        path = shlex.quote(self.fake_claude()["PATH"])
+        command = f"PATH={path} {shlex.quote(OPENCODE)}; sleep 60"
         self.tmux("new-window", "-d", "-n", "opencode", "-c", str(self.cwd), command)
         pane = self.tmux("display", "-p", "-t", "work:opencode", "#{pane_id}")
         pane = pane.stdout.strip()
@@ -1798,6 +1800,22 @@ class Integration(unittest.TestCase):
         cwd = self.tmux("show", "-pqv", "-t", pane, "@agent-resurrect-cwd").stdout
         self.assertTrue(cwd.strip().startswith("/"), cwd)
         self.assertEqual(Path(cwd.strip()).resolve(), self.cwd.resolve())
+        # The check command adds the check's output for this session to its
+        # prompt, which the TUI shows. Interrupt the failing request first;
+        # the first Enter takes the completion.
+        for _ in range(2):
+            self.tmux("send-keys", "-t", pane, "Escape")
+            time.sleep(0.5)
+        self.tmux("send-keys", "-t", pane, "-l", "/tmux-resurrect-check")
+        for _ in range(2):
+            time.sleep(1)
+            self.tmux("send-keys", "-t", pane, "Enter")
+        line = f"this pane records session {session.split()[1]}"
+        wait_until(
+            lambda: line in self.tmux("capture-pane", "-p", "-t", pane).stdout,
+            "OpenCode did not show the check",
+            30,
+        )
         # Interrupting OpenCode at an empty prompt exits it cleanly.
         self.tmux("send-keys", "-t", pane, "C-c")
         wait_until(lambda: not recorded(), "OpenCode did not clear its session", 30)

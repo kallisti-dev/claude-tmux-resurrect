@@ -41,10 +41,11 @@ with Oh my tmux!, and as a clone, and load the Nix tmux package with
 `run-shell`, as Home Manager and NixOS do; tpack and nix-darwin are untested.
 Two tests run the Claude Code and OpenCode binaries from the pinned nixpkgs,
 without network access, to check that a session started in a new pane loads
-the plugin and records and clears its session ID. Claude Code loads it through
-`CLAUDE_CODE_PLUGIN_DIRS` from the source and from the `skills` directory for
-the Nix packages; OpenCode through `OPENCODE_CONFIG_CONTENT` and its
-configuration file. The tests do not cover authentication, session file
+the plugin and records and clears its session ID, and that OpenCode's
+`/tmux-resurrect-check` shows the check for its session. Claude Code loads it
+through `CLAUDE_CODE_PLUGIN_DIRS` from the source and from the `skills`
+directory for the Nix packages; OpenCode through `OPENCODE_CONFIG_CONTENT` and
+its configuration file. The tests do not cover authentication, session file
 compatibility across versions, or an actual conversation resumption.
 
 The transcript directory layout and top-level `cwd` and `permissionMode` fields

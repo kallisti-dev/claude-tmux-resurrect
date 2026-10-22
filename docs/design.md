@@ -89,6 +89,11 @@ unclean exit not at all. The TUI runs plugins in a worker thread with the
 pane's environment; `opencode run`, `serve`, and `web` run them on the main
 thread, where the plugin does nothing.
 
+The OpenCode plugin also adds the command `/tmux-resurrect-check`. When it
+runs, the plugin first records the session, since the command may be its first
+prompt, then runs `tmux-agent-resurrect-check --session ID` and appends the
+output to the command's prompt for OpenCode to explain.
+
 ## Saving
 
 tmux-resurrect runs `tmux-agent-resurrect-save SNAPSHOT` after writing its
@@ -284,7 +289,7 @@ does not clear a value setup captured; see
 | `bin/tmux-agent-resurrect-setup [--remove]` | Register or remove the callbacks and the harness plugin entries |
 | `.claude-plugin/plugin.json`, `hooks/hooks.json` | Claude Code plugin manifest and session hooks |
 | `bin/tmux-agent-resurrect-claude-hook` | Claude's session hook: record the session and its launch details, or clear it |
-| `opencode/tmux-agent-resurrect.js` | OpenCode plugin: report the TUI's root session |
+| `opencode/tmux-agent-resurrect.js` | OpenCode plugin: report the TUI's root session, and add `/tmux-resurrect-check`, which adds the check's result to its prompt |
 | `bin/tmux-agent-resurrect-record start\|end AGENT ID [DIR]` | Record or clear a session on the calling pane, for the OpenCode plugin |
 | `bin/tmux-agent-resurrect-save SNAPSHOT` | Add session records to a snapshot and stop resurrect restarting agent panes |
 | `bin/tmux-agent-resurrect-pre-restore` | Stop dispatch while resurrect restores the layout |

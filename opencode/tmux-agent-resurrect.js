@@ -9,13 +9,17 @@
 // OpenCode tells plugins which session the TUI shows only when that session
 // is created or prompted, so a session opened with -s or switched to is
 // reported at its next prompt.
+//
+// It also adds /tmux-resurrect-check, which runs tmux-agent-resurrect-check
+// for the session and has OpenCode explain the result.
 // SPDX-License-Identifier: BSD-3-Clause
 import { fileURLToPath } from "node:url";
 import { isMainThread } from "node:worker_threads";
 
-const recorder = fileURLToPath(
-  new URL("../bin/tmux-agent-resurrect-record", import.meta.url),
-);
+const path = (file) => fileURLToPath(new URL(`../${file}`, import.meta.url));
+const recorder = path("bin/tmux-agent-resurrect-record");
+const checker = path("bin/tmux-agent-resurrect-check");
+const check = "tmux-resurrect-check";
 
 export const TmuxAgentResurrect = async ({ client }) => {
   // The TUI runs plugins in a worker thread with the pane's environment.
@@ -39,15 +43,22 @@ export const TmuxAgentResurrect = async ({ client }) => {
   };
   // Without an env option, Bun.spawn passes the environment from startup,
   // not variables OpenCode sets later. An argv array runs no shell.
-  const record = async (args) => {
-    const child = Bun.spawn([recorder, ...args], {
+  const run = async (argv, output = "ignore") => {
+    const child = Bun.spawn(argv, {
       env: process.env,
       stdin: "ignore",
-      stdout: "ignore",
-      stderr: "ignore",
+      stdout: output,
+      stderr: output,
     });
+    const [stdout, stderr] = await Promise.all(
+      [child.stdout, child.stderr].map((stream) =>
+        stream ? new Response(stream).text() : "",
+      ),
+    );
     await child.exited;
+    return stdout + stderr;
   };
+  const record = (args) => run([recorder, ...args]);
   const show = async (id) => {
     if (!id || id === current) return;
     if (!sessions.has(id)) {
@@ -61,6 +72,25 @@ export const TmuxAgentResurrect = async ({ client }) => {
   };
 
   return {
+    config: async (config) => {
+      config.command = {
+        ...config.command,
+        [check]: {
+          description:
+            "Check whether tmux-resurrect can resume this OpenCode session",
+          template: `Summarize the result of tmux-agent-resurrect-check below, which reports whether the tmux server, this pane, and OpenCode are set up so that tmux-resurrect can resume this session. For each line marked \`problem\`, explain the cause and the fix, using \`${path("docs/troubleshooting.md")}\`. Change configuration only if the user asks.`,
+        },
+      };
+    },
+    // Record the session before the check looks for it, since the command
+    // may be its first prompt, then add the check's output to the prompt.
+    "command.execute.before": async ({ command, sessionID }, output) => {
+      if (command !== check) return;
+      await enqueue(() => show(sessionID));
+      const result = await run([checker, "--session", sessionID], "pipe");
+      const part = output.parts.find((part) => part.type === "text");
+      if (part) part.text += `\n\n\`\`\`\n${result.trimEnd()}\n\`\`\`\n`;
+    },
     event: async ({ event }) => {
       if (event.type !== "session.created" && event.type !== "session.updated") {
         return;
