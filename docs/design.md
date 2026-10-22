@@ -1,232 +1,296 @@
 # Design
 
-This integration adds exact Claude conversation resumption to tmux-resurrect.
-Resurrect handles the layout; these scripts associate each Claude pane with its
-session ID and prepare the command needed to resume it.
+tmux-resurrect restores the layout and restarts ordinary programs; this plugin
+restarts each agent pane's conversation exactly. It has two halves:
 
-## Plugin loading
+- A plugin for each harness reports the session its pane runs. The Claude Code
+  plugin does this with session hooks; the OpenCode plugin with OpenCode's
+  plugin events.
+- The tmux plugin registers callbacks with tmux-resurrect and tmux. Saving
+  adds the reported sessions to the resurrect snapshot, restoring prepares a
+  resume command for each pane, and attaching a client types those commands
+  into their panes.
 
-The repository is a tmux plugin that is also a Claude Code plugin and holds an
-OpenCode plugin. tmux runs `tmux-agent-resurrect.tmux`, which runs setup.
-Setup registers the resurrect and tmux callbacks. When the plugin directory
-also holds `hooks/hooks.json`, as the repository does, setup adds the directory
-to `CLAUDE_CODE_PLUGIN_DIRS` in tmux's global environment. Claude Code loads
-each directory listed in that variable in place, as a session-only plugin, so
-Claude sessions started in new panes run `hooks/hooks.json` from the same
-directory as the tmux callbacks, and both come from the same files.
+The only interface between the halves is a set of pane options, described in
+[tmux options](#tmux-options). Each pane's `@agent-resurrect-session` holds
+the harness and session ID it runs, such as `claude 1111…`.
 
-When the directory holds `opencode/tmux-agent-resurrect.js`, setup also adds
-that file to the plugin list in tmux's global `OPENCODE_CONFIG_CONTENT`,
-keeping the rest of that JSON. OpenCode loads plugins listed there in addition
-to those in its configuration files. The OpenCode TUI runs plugins in a worker
-thread with the pane's environment, where the plugin reports the session to
-`tmux-agent-resurrect-record` when a root session is created or prompted, and
-reports its end when OpenCode shuts down cleanly. `opencode run`, `serve`, and
-`web` run plugins on the main thread, where the plugin does nothing.
+## Loading
+
+tmux runs `tmux-agent-resurrect.tmux`, which runs setup and shows a failure
+on attached clients, since TPM discards its output. Setup registers the
+callbacks described under [hook registration](#hook-registration) and records
+the plugin's directory and version in `@agent-resurrect-dir` and
+`@agent-resurrect-version`.
+
+The repository is also a Claude Code plugin and holds the OpenCode plugin.
+When the plugin directory has `hooks/hooks.json`, setup adds the directory to
+`CLAUDE_CODE_PLUGIN_DIRS` in tmux's global environment, and Claude Code loads
+it in place as the session-only plugin `tmux-resurrect@inline`. When it has
+`opencode/tmux-agent-resurrect.js`, setup adds that file to the `plugin` list
+in the global `OPENCODE_CONFIG_CONTENT`, keeping the rest of that JSON, and
+OpenCode loads it beside the plugins in its configuration files. The harness
+plugins then run from the same files as the tmux callbacks. When the plugin
+moves, setup replaces the entry it added and keeps entries that something else
+added.
 
 The Nix packages split the halves instead. The tmux plugin package has neither
-agent plugin, so setup leaves both variables alone, and each agent plugin
-package is installed where that agent loads plugins, such as Claude Code's
-`skills` directory or OpenCode's configuration file. Either way, the tmux
-options under [transient tmux state](#transient-tmux-state) are the only
-interface between the halves.
+harness plugin, so setup leaves both variables alone, and each harness plugin
+package is installed where its harness loads plugins: Claude Code's `skills`
+directory, or OpenCode's configuration file.
 
-Setup records the directory it listed and replaces that entry when the plugin
-moves, keeping entries that something else added. A process keeps the
-environment it started with, so Claude sessions in panes opened before the
-plugin loaded do not load its hooks. For the same reason, a pane opened before
-the plugin moved starts Claude with the earlier copy. The SessionStart hook
-compares its own manifest version with the one setup recorded, and reports a
-difference once per pair of versions; this also covers separately installed
-packages of different versions.
+A process keeps the environment it started with. Harnesses started in panes
+opened before the plugin first loaded don't load it, so setup reports that
+when it first loads into a server that already has panes. A pane opened before
+the plugin moved, such as to a new Nix store path, starts Claude with the
+earlier copy. The Claude hook compares its own manifest version with
+`@agent-resurrect-version` whenever it runs from another directory, and
+reports a difference once per pair of versions; this also covers separately
+installed packages of different versions.
 
-## Save and restore
+## Recording sessions
 
-Claude's SessionStart hook records the exact session ID on its tmux pane, with
-the `CLAUDE_CONFIG_DIR` that Claude runs with: the session's transcript is in
-that directory, and resuming it needs the same one. SessionEnd clears them
-only if the ID still matches, so a delayed event cannot clear a newer
-conversation. Saving adds these mappings to the resurrect snapshot
-and blanks the generic saved agent commands to prevent a second process restart.
-A pane runs an agent if its process name or, failing that, its command line
-names one: macOS names a process after the file a symlink resolves to, such as
-`versions/2.1.300` for Claude's native installer, and an npm installation runs
-as `node`.
-When resuming, there is no fallback to a session picker: a missing or ambiguous
-transcript is skipped with a diagnostic. A session whose directory does not
-exist may be on a volume that is not mounted yet, so it stays queued, and in
-later snapshots, until an attach finds the directory; closing its pane discards
-it. A worktree missing from an existing repository has been removed, so its
-session is skipped.
+`record_session` in `lib/tmux-agent-resurrect.sh` sets the session's pane
+options, setting `@agent-resurrect-session` last so that a reader that sees the
+session also sees the rest, and clears any pending resume for the pane.
+`end_session` clears them only while the pane still records the ending session,
+comparing and clearing in a single tmux command, so a late end cannot clear a
+newer session.
 
-OpenCode reports sessions late: a new session exists only after its first
-prompt, a session reopened with `-s` is reported at its next prompt, and an
-unclean exit reports nothing. For such an agent, saves keep a session the
-dispatcher resumed until the agent reports a session, and keep a session the
-agent reported only while the pane's command is still that agent. Panes running it
-without a recorded session are not reported, because before the first prompt
-there is nothing to resume.
+Claude Code runs `tmux-agent-resurrect-claude-hook` on SessionStart and
+SessionEnd. On SessionStart, the hook records the session ID together with the
+launch details that save adds to the session's record: the session's
+`CLAUDE_CONFIG_DIR`, since its transcript is under that directory and resuming
+needs the same one, and the options a resume repeats. It reads the options from
+the command line of `CLAUDE_PID`, the Claude process:
 
-Restore is split into two hooks because resurrect switches between sessions while
-rebuilding its layout. The pre-restore hook blocks launches during those switches.
-The post-restore hook prepares all resume commands, clears the gate, then dispatches
-commands for sessions with attached clients. Detached sessions wait for their first
-attachment or client switch. This avoids launching every saved conversation during
-a detached restore.
+- It repeats those that configure the session and that `--resume` does not
+  restore, such as `--model`, `--settings`, and `--add-dir`. It leaves out
+  those that choose or create a session, apply only with `--print`, or set the
+  permission mode, which the resumed session restores. Save adds
+  `--dangerously-skip-permissions` from the transcript instead.
+- Relative paths are resolved against the directory Claude started in. A
+  `--settings` or `--mcp-config` value that isn't a file is JSON, which may
+  hold secrets, so it is not repeated.
+- It stops at the first argument whose meaning is uncertain, such as an option
+  it doesn't know or the prompt. The options it knows are Claude Code
+  2.1.300's.
+- Linux keeps the arguments apart in `/proc`. On macOS, `ps` joins them with
+  spaces, so a path is rejoined only where the joined words name an existing
+  path, and text such as a system prompt ends the options.
 
-The dispatcher serializes launches within each session and leaves panes pending
-if they are outside a supported shell or in copy mode. It types the command
-without looking for the agent itself: the pane's shell, whose configuration
-can extend its `PATH`, finds it. After sending a command, it marks the pane as
-dispatched. That flag lasts for the pane's lifetime, preventing later
-attachments or repeated restore calls from launching the conversation again.
-The pane keeps the saved record until the agent reports a session, so saves
-keep a conversation whose command failed in the pane;
-see [troubleshooting](troubleshooting.md) for recovery steps.
+OpenCode tells plugins which session its TUI shows only when that session is
+created or gets a prompt. The OpenCode plugin then runs
+`tmux-agent-resurrect-record start opencode ID DIRECTORY` for the root session,
+ignoring subagent sessions, and `tmux-agent-resurrect-record end opencode ID`
+when OpenCode shuts down cleanly. So a new session is reported at its first
+prompt, a session reopened with `-s` or switched to at its next prompt, and an
+unclean exit not at all. The TUI runs plugins in a worker thread with the
+pane's environment; `opencode run`, `serve`, and `web` run them on the main
+thread, where the plugin does nothing.
 
-## Notices
+## Saving
 
-Problems that need the user's attention are shown with `display-message` on
-every attached client, as well as on stderr:
+tmux-resurrect runs `tmux-agent-resurrect-save SNAPSHOT` after writing its
+layout. For each pane line in the snapshot, save finds the tmux pane and
+whether it runs a harness: its `#{pane_current_command}` or, failing that,
+its command line names one. macOS names a process after the file a symlink
+resolves to, such as `versions/2.1.300` for Claude's native installer, and an
+npm installation runs as `node`.
 
-- setup failures, which TPM would otherwise discard
-- the first load into a server that already has panes, since Claude sessions
-  started in those panes do not load the plugin
-- Claude panes without a recorded session ID when saving, once each time that
-  set of panes changes, because automatic saves repeat
-- saved sessions that a restore cannot resume, with the first reason
-- saved sessions that wait for their directory to exist
-- pending resumes left for a later attach because a pane is busy or in copy mode
-- a Claude session that loaded a copy of the plugin with another version
+A pane that records a session gets a [snapshot record](#snapshot-records):
 
-tmux-resurrect shows its own message after running its hooks, so a notice is
-scheduled to appear one second after the event, for five seconds. If no client
-is attached by then, the notice is kept and shown when a client next attaches.
+- For Claude, the directory is the latest absolute `cwd` in the session's
+  transcript, or the pane's directory if the transcript has none; a directory
+  under `REPO/.claude/worktrees/NAME` also sets the worktree. If the latest
+  permission mode in the transcript is `bypassPermissions`, the record's
+  options gain `--dangerously-skip-permissions`.
+- For OpenCode, the directory is the one the plugin reported. OpenCode may not
+  report an end, so its session is saved only while the pane still runs
+  OpenCode.
+
+A pane waiting for its resume, or whose resume was dispatched but whose
+harness hasn't reported a session yet, keeps its pending record, so a save
+between restoring and resuming loses nothing. A pane that runs Claude without
+a recorded session is reported, once each time that set of panes changes,
+since automatic saves repeat. A pane running OpenCode without one is not
+reported, because before its first prompt there is nothing to resume.
+
+Save then sets the command field of each agent pane's line to `:`, which stops
+resurrect from restarting the harness itself, appends the records, and replaces
+the snapshot through a file created with mode 0600.
+
+## Restoring
+
+Resurrect switches between sessions while it rebuilds the layout, which would
+run the attach hooks. `tmux-agent-resurrect-pre-restore` sets
+`@agent-resurrect-restoring`, which stops dispatch, and
+`tmux-agent-resurrect-post-restore` clears it when it has finished.
+
+Post-restore reads the snapshot that resurrect restored, by default its `last`
+link, under the same directory that resurrect uses. A new restore replaces the
+pending resumes from an earlier one, except for panes already dispatched. For
+each valid record whose pane exists and has neither a recorded session nor a
+dispatched resume, it builds the resume command:
+
+- Claude: `cd -- DIR && claude --resume ID`, with `CLAUDE_CONFIG_DIR=…` before
+  `claude` if the session had one, and the repeated options after it. For a
+  worktree, the command runs from the main repository and adds
+  `--worktree NAME`.
+- OpenCode: `cd -- DIR && opencode -s ID`.
+
+There is no fallback to a session picker. A Claude session is skipped if its
+transcript is missing, ambiguous, or empty, or if its worktree no longer
+exists in an existing repository, since worktrees are routinely removed. A
+session whose directory, main repository, or Claude configuration directory
+does not exist may be on a volume that is not mounted yet. It stays pending,
+and so in later snapshots, until a dispatch finds the directory; closing its
+pane discards it.
+
+Post-restore stores the record and command on the pane, marks the pane's
+session as pending, reports skipped and waiting sessions in one notice, and
+dispatches the sessions that have attached clients.
+
+## Dispatching
+
+`tmux-agent-resurrect-arm` runs when a client attaches to or switches to a
+tmux session, and after a restore. It does nothing while a restore is running
+or for a session without attached clients, so a detached restore starts no
+harnesses. A per-session tmux lock serializes clients that attach at once.
+
+For each pending pane, it rebuilds the resume command, so a directory that has
+appeared since the restore is found, and types it into the pane with
+`send-keys -l`, followed by Enter. It types only at a shell prompt, which it
+recognizes by `bash`, `zsh`, `sh`, `dash`, or `ksh` as the pane's command, and
+not in copy mode; other panes wait for a later attach, with a notice. The
+command does not look for the harness itself; the pane's shell, whose
+configuration can extend its `PATH`, finds it.
+
+`@agent-resurrect-launched` then marks the pane for its lifetime, so later
+attachments and restores never type into it again. The pane keeps its record
+until its harness reports a session, so saves keep a conversation whose
+command failed in the shell; see [troubleshooting](troubleshooting.md#a-dispatched-command-failed).
 
 ## Hook registration
 
-`tmux-agent-resurrect-setup` registers the existing commands with tmux and
-resurrect. It does not add another dispatcher. Empty resurrect hook options run
-the public commands directly. If an option already has a command, setup combines
-it with ours in a single inline shell function that forwards hook arguments and
-returns a failure status if either command fails. Our pre-restore guard runs first;
-existing post-restore and save commands run before ours.
+Setup registers the scripts with resurrect's `post-save-layout`,
+`pre-restore-all`, and `post-restore-all` hooks, and runs dispatch from tmux's
+`client-attached` and `client-session-changed` hooks. A tmux lock serializes
+setup runs.
 
-Each registered command first checks that its script still exists and otherwise
-succeeds without doing anything. A tmux server keeps registrations until it
-exits, and reloading a configuration does not remove them, so this keeps hooks
-left behind by an uninstall from failing while other callbacks still run.
-Scheduled notices check the same way, since tmux shows a failed delayed command
-in view mode in the current pane, where pending resumes wait.
+An empty resurrect hook option runs the script directly. If an option already
+has a command, setup combines it with the script in one inline shell function
+that forwards the hook's arguments and fails if either command fails. The
+pre-restore guard runs first; existing post-restore and save commands run
+before the plugin's. The existing command runs in a subshell, so an `exit`
+cannot prevent the plugin's from running, and its directory and environment
+changes stay there. Setup records the previous and combined values; a reload
+reuses them while the option still holds the combined value, and fails with a
+request to reset the option if something wrapped it.
 
-The existing command runs in a subshell, so an `exit` cannot prevent ours from
-running. Its shell-local directory and environment changes stay in that subshell.
-Setup does not try to untangle arbitrary wrappers around its generated functions;
-it asks for a reset if one is found.
+For tmux's hook arrays, setup takes a free index and records it with tmux's
+canonical text for the handler. A reload reuses that index only while it still
+holds that handler, and otherwise takes another free one.
 
-For tmux's native attach and session-switch hook arrays, setup selects a free
-numeric slot and records tmux's canonical handler text. Reloads, including changes
-to the installation path, reuse that slot only while its handler still matches;
-otherwise setup chooses another free slot. `tmux-agent-resurrect-setup --remove`
-removes its handlers and restores previous resurrect settings only where the
-current value is still the one setup installed.
+Each registered command first checks that its script still exists, and
+otherwise succeeds without running anything. A tmux server keeps its hooks
+until it exits, and reloading a configuration does not remove them, so this
+keeps hooks left behind by an uninstall from failing while other callbacks
+still run. Scheduled notices check the same way, since tmux shows a failed
+delayed command in view mode in the current pane, where pending resumes wait.
 
-## Former name
+`tmux-agent-resurrect-setup --remove` removes the tmux hook handlers and the
+environment entries, and restores the previous resurrect hook values where the
+current values are still setup's.
 
-Earlier versions of the plugin were named claude-tmux-resurrect and used that
-name for their scripts, options, and snapshot records. Before registering its
-own hooks, setup removes that version's registrations as its own
-`claude-tmux-resurrect-setup --remove` would, along with its other
-`@claude-tmux-resurrect-*` options, so it captures the callbacks they wrapped
-instead of nesting them. It also carries over the resumes that a restore by
-that version left pending and the flags on panes it dispatched. `--remove`
-removes both versions' registrations.
+## Notices
 
-Claude Code keeps the hook commands a session loaded when it started, so a
-Claude session that loaded the earlier version keeps running that version's
-hook, which records only the session ID, in `@claude_session_id`. Save,
-restore, and the check read that option for a pane without
-`@agent-resurrect-session`, and the current hook clears it when it records or
-ends a session. The earlier version's callbacks read only that option, so
-while they are still registered, as after a Home Manager switch until tmux
-reloads its configuration, the current hook records Claude sessions there too.
-Where the plugin directory was updated in place, as in a TPM clone or a Home
-Manager link, such a session runs
-`claude-tmux-resurrect-hook`, which runs the current hook. Restore also reads
-the earlier version's snapshot records, which begin `claude-tmux` and do not
-name an agent, as Claude's.
+Problems that need the user's attention go to stderr and to every attached
+client's message line:
+
+- setup failures
+- the first load into a server that already has panes
+- a global `OPENCODE_CONFIG_CONTENT` that setup can't add the plugin to
+- Claude panes without a recorded session when saving
+- sessions a restore can't resume, with the first reason, and sessions waiting
+  for a directory
+- pending resumes left for a later attach because a pane is not at a shell
+  prompt or is in copy mode
+- a Claude session that loaded a plugin with another version
+
+tmux-resurrect shows its own message after running its hooks, so a notice is
+shown one second after the event, for five seconds. If no client is attached
+by then, it is kept in `@agent-resurrect-notices` and shown on the next client
+that attaches.
+
+## Snapshot records
+
+Each saved session is a snapshot line of `agent-resurrect`, a tab, and a JSON
+object:
+
+| Field | Value |
+| --- | --- |
+| `version` | `1` |
+| `agent` | `claude` or `opencode` |
+| `session`, `window`, `pane` | The pane's tmux session name and window and pane indexes |
+| `session_id` | The harness's session ID |
+| `cwd` | The absolute directory the session resumes in |
+| `worktree` | The Claude worktree name, otherwise empty |
+| `config_dir` | Claude only: the session's `CLAUDE_CONFIG_DIR`, empty if it was unset |
+| `options` | Claude only: the arguments the resume command repeats |
+
+For a record without `config_dir`, restore looks for the transcript under the
+tmux server's `CLAUDE_CONFIG_DIR`, and the resume command sets none.
+Restore validates each record before using it, and rejects control characters,
+which resurrect's line and tab format cannot hold.
+
+The only harness files read are Claude transcripts, at
+`CONFIG_DIR/projects/*/SESSION_ID.jsonl` under the session's configuration
+directory, by default `~/.claude`. No transcript, worktree, or harness
+configuration file is modified, and transcript contents are never copied into
+snapshots. The records can reveal project names and paths, and resurrect's own
+pane titles, commands, and optional pane contents may reveal more, so keep the
+snapshot directory private. The plugin has no network service or telemetry.
+
+## tmux options
+
+| Option | Scope | Purpose |
+| --- | --- | --- |
+| `@agent-resurrect-session` | Pane | The harness and session ID running in the pane, maintained by its plugin |
+| `@agent-resurrect-cwd` | Pane | The session's directory, from harnesses whose session files save does not read |
+| `@agent-resurrect-launch` | Pane | JSON that save adds to the session's record, such as Claude's `config_dir` and `options` |
+| `@agent-resurrect-resume-data` | Pane | The record waiting for dispatch, or dispatched and not yet reported by the harness |
+| `@agent-resurrect-resume-cmd` | Pane | The resume command, kept for inspection |
+| `@agent-resurrect-launched` | Pane | A resume was typed into the pane |
+| `@agent-resurrect-pending` | Session | At least one pane waits for dispatch |
+| `@agent-resurrect-restoring` | Global | Dispatch is stopped while a restore runs |
+| `@agent-resurrect-notices` | Global | Notices raised while no client was attached |
+| `@agent-resurrect-unrecorded` | Global | The Claude panes without a session at the last save that reported them |
+| `@agent-resurrect-mismatch` | Global | The plugin versions in the last mismatch reported at SessionStart |
+| `@agent-resurrect-dir`, `@agent-resurrect-version` | Global | The loaded plugin's directory and version |
+
+Setup also keeps its registrations in global options: `-previous-PHASE` and
+`-managed-PHASE` for each resurrect hook, and `-EVENT-slot` and
+`-EVENT-handler` for each tmux hook, all beginning `@agent-resurrect`. These
+describe the running server. Removing a hook from the configuration file alone
+does not clear a value setup captured; see
+[replacing shared hooks](troubleshooting.md#replacing-or-removing-a-shared-hook).
 
 ## Components
 
 | Component | Responsibility |
 | --- | --- |
-| `tmux-agent-resurrect.tmux` | tmux entry point: run setup and display its failures |
-| `.claude-plugin/plugin.json`, `hooks/hooks.json` | Claude Code plugin manifest and session hook configuration |
-| `tmux-agent-resurrect-setup [--remove]` | Register or remove hooks and the `CLAUDE_CODE_PLUGIN_DIRS` entry while preserving other integrations |
-| `tmux-agent-resurrect-claude-hook` | Claude Code's session hook: record `@agent-resurrect-session` on SessionStart; clear a matching session on SessionEnd |
-| `claude-tmux-resurrect-hook` | The session hook's [former name](#former-name), for Claude sessions that loaded it: run `tmux-agent-resurrect-claude-hook` |
-| `tmux-agent-resurrect-record start\|end AGENT ID [DIR]` | Record or clear a session on the calling pane, for agent plugins such as OpenCode's |
-| `tmux-agent-resurrect-save SNAPSHOT` | Resolve cwd/worktree, embed mappings, blank generic saved agent commands |
-| `tmux-agent-resurrect-pre-restore` | Suppress launches during resurrect's layout restoration |
-| `tmux-agent-resurrect-post-restore [SNAPSHOT]` | Queue exact resume commands, clear the restore gate, and launch sessions that have attached clients |
-| `tmux-agent-resurrect-arm '$N' [CLIENT]` | Dispatch pending commands once for the attached tmux session ID, and show kept notices on an attaching client |
-| `tmux-agent-resurrect-notify MESSAGE` | Show a scheduled notice on attached clients, or keep it for the next attach |
-| `tmux-agent-resurrect-check [--session ID]` | Report problems with the tmux server, the calling shell, Claude Code, and panes running Claude |
-| `skills/check/SKILL.md` | `/tmux-resurrect:check`, which has Claude run the check and explain its result |
-| `lib/tmux-agent-resurrect.sh` | Share transcript lookup, metadata validation, command quoting, and snapshot path resolution |
-
-## Local data
-
-The only Claude files read are matching
-`$CLAUDE_CONFIG_DIR/projects/*/SESSION_ID.jsonl` transcripts, in the configuration
-directory the session ran with (default: `~/.claude`). Records saved by earlier
-versions do not name one, and the tmux server's `CLAUDE_CONFIG_DIR` stands in.
-Save streams these files to obtain top-level `cwd` values,
-using the latest valid absolute path or falling back to the pane's directory.
-Restore checks for a unique, readable, nonempty matching transcript. No transcript,
-worktree, or Claude settings file is modified. Transcript contents are never
-copied into snapshots.
-
-Each snapshot includes lines beginning `agent-resurrect`, followed by a tab and a JSON
-object containing schema version 1, the agent (`claude`), tmux session name,
-window and pane indexes, the agent's session ID, absolute cwd, and Claude
-worktree name, which is empty for other agents. Claude records also hold the
-session's `CLAUDE_CONFIG_DIR` as `config_dir`, empty when it was unset, and as
-`options` the arguments that the resume command repeats. Those are read from
-Claude's command line when its session starts, and include
-`--dangerously-skip-permissions` if the transcript shows that the session last
-bypassed permissions. This local metadata can reveal
-project names and paths. Snapshot files are replaced with mode 0600; use a private
-snapshot directory as well. Existing resurrect pane titles, commands, or optional
-pane-content captures may contain additional information independently of this
-integration. There is no network service or telemetry in these scripts.
-
-## Transient tmux state
-
-| Option | Scope | Purpose |
-| --- | --- | --- |
-| `@agent-resurrect-session` | Pane | The agent and session ID running in the pane, such as `claude 1111…`, maintained by the agent's hooks |
-| `@agent-resurrect-cwd` | Pane | The recorded session's directory, from agents whose session files save does not read |
-| `@agent-resurrect-launch` | Pane | How the recorded session's agent runs, such as Claude's `config_dir`, for save to add to its record |
-| `@agent-resurrect-resume-data` | Pane | Snapshot metadata waiting to be dispatched, or dispatched and not yet reported by the agent |
-| `@agent-resurrect-resume-cmd` | Pane | Generated resume command, available for inspection |
-| `@agent-resurrect-launched` | Pane | Command already dispatched during this pane's lifetime |
-| `@agent-resurrect-pending` | Session | At least one pane has a pending resume |
-| `@agent-resurrect-restoring` | Global session | Launches are blocked while the layout or pending commands are being restored |
-| `@agent-resurrect-notices` | Global session | Notices raised while no client was attached |
-| `@agent-resurrect-unrecorded` | Global session | Claude panes without a session ID at the last save that warned about them |
-| `@agent-resurrect-mismatch` | Global session | Plugin versions in the last mismatch reported at SessionStart |
-
-Pending commands and metadata are removed when the agent reports a session in
-the pane. Until then, saving retains the saved metadata, whether the
-conversation is waiting for attachment or was dispatched.
-
-Setup keeps previous and managed hook values, array slots, and expected handler
-text in global `@agent-resurrect-*` options, and the directory it listed in
-`CLAUDE_CODE_PLUGIN_DIRS` and its version in `@agent-resurrect-dir` and
-`@agent-resurrect-version`. These describe the
-running server's registrations. Removing a callback from the configuration file
-alone does not clear a value setup previously captured; see
-[replacing shared hooks](troubleshooting.md#replacing-or-removing-a-shared-hook).
-
-See the [README](../README.md) for setup and usage.
+| `tmux-agent-resurrect.tmux` | tmux entry point: run setup and show its failures |
+| `bin/tmux-agent-resurrect-setup [--remove]` | Register or remove the callbacks and the harness plugin entries |
+| `.claude-plugin/plugin.json`, `hooks/hooks.json` | Claude Code plugin manifest and session hooks |
+| `bin/tmux-agent-resurrect-claude-hook` | Claude's session hook: record the session and its launch details, or clear it |
+| `opencode/tmux-agent-resurrect.js` | OpenCode plugin: report the TUI's root session |
+| `bin/tmux-agent-resurrect-record start\|end AGENT ID [DIR]` | Record or clear a session on the calling pane, for the OpenCode plugin |
+| `bin/tmux-agent-resurrect-save SNAPSHOT` | Add session records to a snapshot and stop resurrect restarting agent panes |
+| `bin/tmux-agent-resurrect-pre-restore` | Stop dispatch while resurrect restores the layout |
+| `bin/tmux-agent-resurrect-post-restore [SNAPSHOT]` | Prepare resume commands and dispatch them for attached sessions |
+| `bin/tmux-agent-resurrect-arm SESSION_ID [CLIENT]` | Type pending resume commands for a tmux session, and show kept notices on an attaching client |
+| `bin/tmux-agent-resurrect-notify MESSAGE` | Show a scheduled notice, or keep it for the next attach |
+| `bin/tmux-agent-resurrect-check [--session ID]` | Report problems with the tmux server, the calling shell, Claude Code, and agent panes |
+| `skills/check/SKILL.md` | `/tmux-resurrect:check`: have Claude run the check and explain its result |
+| `lib/tmux-agent-resurrect.sh` | Shared functions: recording sessions, agent detection, record validation, resume commands, and the snapshot path |

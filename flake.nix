@@ -134,7 +134,7 @@
               ${testPlugins}
               ${behavior}
             '';
-            # Tests with the real agents. Claude Code fails to format numbers
+            # Tests with the real harnesses. Claude Code fails to format numbers
             # inside the Darwin sandbox, which nixpkgs also disables to build
             # it there.
             agents =

@@ -34,7 +34,7 @@ Code uses.
 
 ## Testing limits
 
-Most tests stub the agents. They verify exact argv, cwd, hook behavior, tmux
+Most tests stub the harnesses. They verify exact argv, cwd, hook behavior, tmux
 lifecycle, interoperability with upstream resurrect and TPM, and upgrades from
 the plugin's last version under its former name. They install the plugin with
 TPM from `~/.tmux.conf` and from `~/.config/tmux/tmux.conf`, with Oh my tmux!,

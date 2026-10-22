@@ -338,9 +338,9 @@ find_transcript() {
 
 # Usage: valid_record JSON
 # Succeed if JSON is exactly one saved pane record, in the format described
-# under "Local data" in docs/design.md. Validate before decoding fields into
-# shell variables. Control characters are incompatible with tmux-resurrect's
-# line/tab-oriented snapshot format.
+# under "Snapshot records" in docs/design.md. Validate before decoding fields
+# into shell variables. Control characters are incompatible with
+# tmux-resurrect's line/tab-oriented snapshot format.
 valid_record() {
   jq -se --arg agents "$agents" '
     def text: type == "string" and length > 0 and
