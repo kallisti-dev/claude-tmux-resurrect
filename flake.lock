@@ -1,22 +1,5 @@
 {
   "nodes": {
-    "claude-tmux-resurrect": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1792455500,
-        "narHash": "sha256-rokAPBgnTpQB5ITsn+6NC2DdQ/TRaF4ks/Eol7L0GZk=",
-        "owner": "kallisti-dev",
-        "repo": "tmux-agent-resurrect",
-        "rev": "8ee37b2499c0432991473ca17d9aff3de059bac4",
-        "type": "github"
-      },
-      "original": {
-        "owner": "kallisti-dev",
-        "repo": "tmux-agent-resurrect",
-        "rev": "8ee37b2499c0432991473ca17d9aff3de059bac4",
-        "type": "github"
-      }
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1791637130,
@@ -67,7 +50,6 @@
     },
     "root": {
       "inputs": {
-        "claude-tmux-resurrect": "claude-tmux-resurrect",
         "nixpkgs": "nixpkgs",
         "oh-my-tmux": "oh-my-tmux",
         "resurrect": "resurrect",

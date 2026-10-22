@@ -33,14 +33,8 @@ done < <(tmux list-sessions -F '#{session_id}')
 }
 skipped=0 waiting=0
 while IFS= read -r line; do
-  if [[ $line == agent-resurrect$'\t'* ]]; then
-    record=${line#*$'\t'}
-  elif [[ $line == claude-tmux$'\t'* ]]; then
-    # Saved under the plugin's former name.
-    record=$(former_record "${line#*$'\t'}")
-  else
-    continue
-  fi
+  [[ $line == agent-resurrect$'\t'* ]] || continue
+  record=${line#*$'\t'}
   if ! valid_record "$record"; then
     warn 'invalid session metadata in snapshot; skipping' 2>>"$reasons"
     skipped=$((skipped + 1))

@@ -37,8 +37,6 @@ GIT = shutil.which("git")
 RESURRECT = os.environ.get("RESURRECT_SOURCE")
 TPM = os.environ.get("TPM_SOURCE")
 OH_MY_TMUX = os.environ.get("OH_MY_TMUX_SOURCE")
-# The plugin's last version under its former name.
-FORMER = os.environ.get("CLAUDE_TMUX_RESURRECT_SOURCE")
 CLAUDE = os.environ.get("CLAUDE_BINARY")
 OPENCODE = os.environ.get("OPENCODE_BINARY")
 VERSION = json.loads((ROOT / ".claude-plugin/plugin.json").read_text())["version"]
@@ -172,7 +170,6 @@ class Integration(unittest.TestCase):
     def script(self, name, *args, data=None, env=None, check=True):
         # Each agent runs its recorder from its own plugin; tmux runs the rest.
         bin = {
-            "claude-tmux-resurrect-hook": CLAUDE_PLUGIN / "bin",
             "tmux-agent-resurrect-claude-hook": CLAUDE_PLUGIN / "bin",
             "tmux-agent-resurrect-record": OPENCODE_PLUGIN / "bin",
         }.get(name, BIN)
@@ -412,21 +409,6 @@ class Integration(unittest.TestCase):
                 path.chmod(path.stat().st_mode | 0o200)
         return destination
 
-    def former_plugin(self, destination=None):
-        # The plugin under its former name, as a TPM clone holds it.
-        return self.copy_tree(
-            Path(FORMER), destination or self.base / "claude-tmux-resurrect"
-        )
-
-    def former_hook(self, plugin, event, session_id=ID, pane=None):
-        # The hook command of a Claude session that loaded PLUGIN's hooks
-        # under the former name.
-        return self.run_command(
-            [str(plugin / "bin/claude-tmux-resurrect-hook")],
-            data=json.dumps({"hook_event_name": event, "session_id": session_id}),
-            env=dict(self.env, TMUX_PANE=pane or self.pane),
-        )
-
     def test_setup_registers_guarded_commands_and_rejects_recapturing_them(self):
         self.load_plugin()
         for phase, script in [
@@ -440,18 +422,13 @@ class Integration(unittest.TestCase):
                 ["[", "!", "-e", path, "]", "||", path],
             )
         option = "@resurrect-hook-post-save-layout"
-        for external in [
-            self.global_option(option) + "; : another-action",
-            # A function that setup generated under the former name.
-            "__claude_tmux_resurrect_post_save_layout; : another-action",
-        ]:
-            with self.subTest(external=external):
-                self.tmux("set", "-g", option, external)
-                result = self.script("tmux-agent-resurrect-setup", check=False)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(option, result.stderr)
-                self.assertIn("reset", result.stderr)
-                self.assertEqual(self.global_option(option), external)
+        external = self.global_option(option) + "; : another-action"
+        self.tmux("set", "-g", option, external)
+        result = self.script("tmux-agent-resurrect-setup", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(option, result.stderr)
+        self.assertIn("reset", result.stderr)
+        self.assertEqual(self.global_option(option), external)
 
     def test_setup_preserves_hooks_and_reloads_without_duplicates(self):
         original = self.previous_hook("save")
@@ -654,148 +631,6 @@ class Integration(unittest.TestCase):
             self.tmux("display", "-p", "-t", self.pane, "#{pane_mode}").stdout.strip(),
             "",
         )
-
-    @unittest.skipUnless(FORMER, "CLAUDE_TMUX_RESURRECT_SOURCE is supplied by Nix")
-    def test_setup_replaces_the_registrations_made_under_the_former_name(self):
-        callbacks = {}
-        for phase in ["post-save-layout", "pre-restore-all", "post-restore-all"]:
-            callbacks[phase] = self.previous_hook(phase)
-            self.tmux("set", "-g", "@resurrect-hook-" + phase, callbacks[phase])
-        foreign = {}
-        for event in ["client-attached", "client-session-changed"]:
-            self.tmux(
-                "set-hook",
-                "-g",
-                event + "[731]",
-                "set-option -g @foreign-handler yes",
-            )
-            foreign[event] = self.native_hooks(event)
-        self.tmux("set-environment", "-g", "CLAUDE_CODE_PLUGIN_DIRS", "/other/plugins")
-        former = self.former_plugin()
-        self.load_plugin(former / "claude-tmux-resurrect.tmux")
-        self.assertEqual(self.plugin_dirs(), f"/other/plugins:{former}")
-        # Its first-load notice is kept a second after setup.
-        wait_until(
-            lambda: self.global_option("@claude-tmux-resurrect-notices"),
-            "the former version did not keep its notice",
-        )
-        self.transcript()
-        self.former_hook(former, "SessionStart")
-
-        self.load_plugin()
-        for phase, callback in callbacks.items():
-            self.assertEqual(
-                self.global_option("@agent-resurrect-previous-" + phase), callback
-            )
-            self.assertNotIn(
-                str(former), self.global_option("@resurrect-hook-" + phase)
-            )
-        for event, handlers in foreign.items():
-            hooks = self.native_hooks(event)
-            self.assertEqual(len(hooks), len(handlers) + 1)
-            self.assertTrue(set(handlers).issubset(hooks))
-            self.assertNotIn(str(former), "\n".join(hooks))
-        self.assertNotIn("@claude-tmux-resurrect-", self.tmux("show", "-g").stdout)
-        listed = "" if SEPARATE else f":{TMUX_PLUGIN}"
-        self.assertEqual(self.plugin_dirs(), "/other/plugins" + listed)
-
-        # The session that the former hook recorded is saved and resumed by
-        # the current scripts alone.
-        self.write_snapshot()
-        self.execute_resurrect_hook("post-save-layout", self.snapshot)
-        self.assertNotIn("claude-tmux\t", self.snapshot.read_text())
-        [record] = self.records()
-        self.assertEqual((record["agent"], record["session_id"]), ("claude", ID))
-        self.former_hook(former, "SessionEnd")
-        self.execute_resurrect_hook("pre-restore-all")
-        self.execute_resurrect_hook("post-restore-all", self.snapshot)
-        self.assertEqual(self.option("@claude_resume_data"), "")
-        self.attach()
-        self.assertEqual(self.expect_launches(1)[0]["argv"], ["--resume", ID])
-        self.assertEqual(
-            [call["phase"] for call in self.previous_calls()], list(callbacks)
-        )
-
-        # A configuration that loads the former version after this one leaves
-        # both registered, which the check reports. Removal undoes both.
-        self.load_plugin(former / "claude-tmux-resurrect.tmux")
-        result = self.check(self.fake_claude())
-        self.assertIn(
-            "problem  the plugin is still registered under its former name",
-            result.stdout,
-        )
-        self.script("tmux-agent-resurrect-setup", "--remove")
-        for phase, callback in callbacks.items():
-            self.assertEqual(self.global_option("@resurrect-hook-" + phase), callback)
-        for event, handlers in foreign.items():
-            self.assertEqual(self.native_hooks(event), handlers)
-        self.assertEqual(self.plugin_dirs(), "/other/plugins")
-
-    @unittest.skipUnless(FORMER, "CLAUDE_TMUX_RESURRECT_SOURCE is supplied by Nix")
-    def test_resumes_left_pending_under_the_former_name_launch_once(self):
-        self.tmux("new-session", "-d", "-s", "later", "-c", str(self.cwd))
-        later = self.tmux("display", "-p", "-t", "later", "#{pane_id}")
-        later = later.stdout.strip()
-        self.transcript()
-        self.transcript(session_id="later-id")
-        former = self.former_plugin()
-        self.load_plugin(former / "claude-tmux-resurrect.tmux")
-        self.former_hook(former, "SessionStart")
-        self.former_hook(former, "SessionStart", "later-id", pane=later)
-        self.write_snapshot()
-        work = self.snapshot.read_text().splitlines()[0]
-        with self.snapshot.open("a") as stream:
-            stream.write(work.replace("pane\twork\t", "pane\tlater\t", 1) + "\n")
-        self.execute_resurrect_hook("post-save-layout", self.snapshot)
-        self.assertEqual(self.snapshot.read_text().count("claude-tmux\t"), 2)
-        self.former_hook(former, "SessionEnd")
-        self.former_hook(former, "SessionEnd", "later-id", pane=later)
-        # The former version queues both sessions, then launches the one whose
-        # tmux session is attached.
-        self.execute_resurrect_hook("post-restore-all", self.snapshot)
-        self.attach("later")
-        self.assertEqual(self.expect_launches(1)[0]["argv"], ["--resume", "later-id"])
-
-        self.load_plugin()
-        self.attach()
-        self.assertEqual(self.expect_launches(2)[1]["argv"], ["--resume", ID])
-        # Restoring the same snapshot again types into neither pane.
-        self.execute_resurrect_hook("post-restore-all", self.snapshot)
-        for pane in [self.pane, later]:
-            self.assertEqual(self.option("@agent-resurrect-launched", pane), "1")
-            self.assertEqual(self.option("@claude_resume_data", pane), "")
-        time.sleep(0.15)
-        self.assertEqual(len(self.launches()), 2)
-
-    @unittest.skipUnless(FORMER, "CLAUDE_TMUX_RESURRECT_SOURCE is supplied by Nix")
-    def test_hook_records_sessions_for_the_former_version_until_setup_runs(self):
-        # A Home Manager switch links the current Claude plugin before tmux
-        # reloads its configuration, so the current hook runs while the
-        # callbacks registered under the former name save and restore.
-        former = self.former_plugin()
-        self.load_plugin(former / "claude-tmux-resurrect.tmux")
-        self.tmux("set", "-p", "-t", self.pane, "@claude_resume_data", "{}")
-        self.transcript()
-        self.hook("SessionStart")
-        self.assertEqual(self.option("@claude_session_id"), ID)
-        self.assertEqual(self.option("@claude_resume_data"), "")
-        self.write_snapshot()
-        self.execute_resurrect_hook("post-save-layout", self.snapshot)
-        [line] = [
-            line
-            for line in self.snapshot.read_text().splitlines()
-            if line.startswith("claude-tmux\t")
-        ]
-        self.assertEqual(json.loads(line.split("\t", 1)[1])["session_id"], ID)
-
-        self.load_plugin()
-        self.write_snapshot()
-        self.execute_resurrect_hook("post-save-layout", self.snapshot)
-        self.assertEqual([record["session_id"] for record in self.records()], [ID])
-        self.transcript(session_id="cleared-id")
-        self.hook("SessionStart", "cleared-id")
-        self.assertEqual(self.option("@claude_session_id"), "")
-        self.assertEqual(self.option("@agent-resurrect-session"), "claude cleared-id")
 
     @unittest.skipIf(SEPARATE, "the packaged tmux plugin does not hold the hooks")
     def test_new_panes_list_the_plugin_beside_other_plugin_directories(self):
@@ -1243,26 +1078,6 @@ class Integration(unittest.TestCase):
     def test_hook_outside_tmux_is_noop(self):
         env = {k: v for k, v in self.env.items() if k not in {"TMUX", "TMUX_PANE"}}
         self.script("tmux-agent-resurrect-claude-hook", data="not json", env=env)
-
-    def test_hook_under_the_former_name_updates_the_session_it_recorded(self):
-        # A Claude session that loaded the plugin under its former name keeps
-        # running its hook by that name, after that version's hook recorded
-        # the session ID.
-        def former(event, session_id=ID):
-            self.script(
-                "claude-tmux-resurrect-hook",
-                data=json.dumps({"hook_event_name": event, "session_id": session_id}),
-            )
-
-        self.tmux("set", "-p", "-t", self.pane, "@claude_session_id", ID)
-        former("SessionEnd", "newer-session")
-        self.assertEqual(self.option("@claude_session_id"), ID)
-        former("SessionEnd")
-        self.assertEqual(self.option("@claude_session_id"), "")
-        self.tmux("set", "-p", "-t", self.pane, "@claude_session_id", ID)
-        former("SessionStart", "cleared-id")
-        self.assertEqual(self.option("@claude_session_id"), "")
-        self.assertEqual(self.option("@agent-resurrect-session"), "claude cleared-id")
 
     def record(self, *args, **kwargs):
         return self.script("tmux-agent-resurrect-record", *args, **kwargs)
@@ -1770,7 +1585,7 @@ class Integration(unittest.TestCase):
         )
 
     def test_records_without_a_config_dir_use_the_server_one(self):
-        # Records that earlier versions saved do not name a directory.
+        # A session whose CLAUDE_CONFIG_DIR was relative has none.
         self.save()
         record = self.records()[0]
         self.assertEqual(record.pop("config_dir"), "")
@@ -2167,81 +1982,6 @@ class Integration(unittest.TestCase):
         self.assertEqual(self.plugin_dirs(), str(installed))
         save = self.global_option("@resurrect-hook-post-save-layout")
         self.assertIn(str(installed / "bin/tmux-agent-resurrect-save"), save)
-
-    @unittest.skipUnless(
-        TPM and RESURRECT and FORMER,
-        "TPM_SOURCE, RESURRECT_SOURCE, and CLAUDE_TMUX_RESURRECT_SOURCE are set",
-    )
-    @unittest.skipIf(TMUX_PLUGIN != ROOT, "TPM installs from a Git repository")
-    @unittest.skipIf(system_plugins(), "TPM also reads @plugin lines in /etc/tmux.conf")
-    def test_tpm_update_from_the_former_name_keeps_sessions_resumable(self):
-        plugins = self.install_tpm()
-        # A clone made under the former name keeps that name.
-        upstream = self.upstream("claude-tmux-resurrect")
-        self.former_plugin(upstream)
-        self.commit(upstream, "Release")
-        config = self.readme_configuration(upstream)
-        self.tmux(
-            "set", "-g", "@resurrect-hook-post-save-layout", self.previous_hook("save")
-        )
-        self.tmux("source-file", str(config))
-        self.run_with_git(plugins / "tpm/bin/install_plugins")
-        self.tmux("source-file", str(config))
-        installed = plugins / "claude-tmux-resurrect"
-        self.assertEqual(self.plugin_dirs(), str(installed))
-        # A Claude session started now loads the former hooks from the clone.
-        self.transcript()
-        self.former_hook(installed, "SessionStart")
-        self.write_snapshot()
-        self.execute_resurrect_hook("post-save-layout", self.snapshot)
-        saved = self.snapdir / "saved before the update.txt"
-        shutil.copyfile(self.snapshot, saved)
-        self.assertIn("claude-tmux\t", saved.read_text())
-
-        # Its first-load notice runs its notify script a second after setup.
-        # Deleting the script first would make tmux show the failure in the
-        # pane, in view mode, where nothing is resumed.
-        wait_until(
-            lambda: self.global_option("@claude-tmux-resurrect-notices"),
-            "the former version did not keep its notice",
-        )
-
-        # prefix + U pulls the current version into the clone, then reloads.
-        self.git(upstream, "rm", "-rq", ".")
-        self.copy_plugin(upstream)
-        self.commit(upstream, "Rename")
-        self.run_with_git(plugins / "tpm/bin/update_plugins", "claude-tmux-resurrect")
-        self.assertFalse((installed / "claude-tmux-resurrect.tmux").exists())
-        self.tmux("source-file", str(config))
-        save = self.global_option("@resurrect-hook-post-save-layout")
-        self.assertIn(str(installed / "bin/tmux-agent-resurrect-save"), save)
-        self.assertNotIn("claude-tmux-resurrect-save", save)
-        for event in ["client-attached", "client-session-changed"]:
-            [handler] = self.native_hooks(event)
-            self.assertIn("tmux-agent-resurrect-arm", handler)
-        self.assertEqual(self.plugin_dirs(), str(installed))
-
-        # The running session keeps its hook command, which now runs the
-        # current hook, and its sessions are saved, including after /clear.
-        self.write_snapshot()
-        self.execute_resurrect_hook("post-save-layout", self.snapshot)
-        self.assertEqual([record["session_id"] for record in self.records()], [ID])
-        self.former_hook(installed, "SessionEnd")
-        self.transcript(session_id="cleared-id")
-        self.former_hook(installed, "SessionStart", "cleared-id")
-        self.write_snapshot()
-        self.execute_resurrect_hook("post-save-layout", self.snapshot)
-        [record] = self.records()
-        self.assertEqual(record["session_id"], "cleared-id")
-        self.former_hook(installed, "SessionEnd", "cleared-id")
-        self.assertEqual(self.option("@agent-resurrect-session"), "")
-        self.assertEqual(self.option("@claude_session_id"), "")
-        self.assertEqual(len(self.previous_calls()), 3)
-
-        # The snapshot saved before the update still resumes its session.
-        self.execute_resurrect_hook("post-restore-all", saved)
-        self.attach()
-        self.assertEqual(self.expect_launches(1)[0]["argv"], ["--resume", ID])
 
     @unittest.skipUnless(
         RESURRECT, "RESURRECT_SOURCE is supplied by nix develop / flake checks"

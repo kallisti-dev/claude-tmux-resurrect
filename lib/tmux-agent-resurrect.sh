@@ -221,37 +221,15 @@ foreground_command() {
 # tmux-agent-resurrect-claude-hook repeat this pattern in jq.
 valid_id() { [[ $1 =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$ ]]; }
 
-# Usage: former_registered
-# Succeed if this tmux server runs the callbacks that setup registered under
-# the plugin's former name, claude-tmux-resurrect. That version keeps them in
-# options for its managed resurrect hooks and tmux hook slots.
-former_registered() {
-  [[ $'\n'$(tmux show-options -g) =~ $'\n'@claude-tmux-resurrect-(managed|client)- ]]
-}
-
 # Usage: pane_session PANE
-# Print the session recorded on PANE as AGENT ID, or nothing. A Claude Code
-# session that loaded this plugin under its former name, claude-tmux-resurrect,
-# runs that version's hook until it restarts, and that hook records only the
-# session ID, in @claude_session_id.
-pane_session() {
-  local session id
-  session=$(pane_option "$1" @agent-resurrect-session)
-  if [[ -z $session ]]; then
-    id=$(pane_option "$1" @claude_session_id)
-    [[ -z $id ]] || session="claude $id"
-  fi
-  printf '%s' "$session"
-}
+# Print the session recorded on PANE as AGENT ID, or nothing.
+pane_session() { pane_option "$1" @agent-resurrect-session; }
 
 # Usage: record_session PANE AGENT ID [DIRECTORY [LAUNCH]]
 # Record that PANE runs AGENT's session ID, in DIRECTORY if given, replacing
 # any pending resume. LAUNCH, if given, is the JSON object that save adds to
 # the session's record, describing how the agent runs. Both are set first, so
-# a reader that sees the session also sees them. Callbacks registered under
-# the former name read only what that version's hook records, so while they
-# run, a Claude session is also recorded that way; otherwise any session
-# recorded that way is cleared.
+# a reader that sees the session also sees them.
 record_session() {
   if [[ -n ${4:-} ]]; then
     tmux set-option -p -t "$1" @agent-resurrect-cwd "$4"
@@ -264,26 +242,16 @@ record_session() {
     tmux set-option -pu -t "$1" @agent-resurrect-launch
   fi
   tmux set-option -p -t "$1" @agent-resurrect-session "$2 $3"
-  if [[ $2 == claude ]] && former_registered; then
-    tmux set-option -p -t "$1" @claude_session_id "$3"
-    tmux set-option -pu -t "$1" @claude_resume_cmd
-    tmux set-option -pu -t "$1" @claude_resume_data
-  else
-    tmux set-option -pu -t "$1" @claude_session_id
-  fi
   tmux set-option -pu -t "$1" @agent-resurrect-resume-cmd
   tmux set-option -pu -t "$1" @agent-resurrect-resume-data
 }
 
 # Usage: end_session PANE AGENT ID
-# Clear PANE's recorded session if it is still AGENT's ID, including a Claude
-# session recorded under the former name. tmux compares and clears in one
-# command, so a newer session that has started meanwhile stays.
+# Clear PANE's recorded session if it is still AGENT's ID. tmux compares and
+# clears in one command, so a newer session that has started meanwhile stays.
 end_session() {
   tmux if-shell -F -t "$1" "#{==:#{@agent-resurrect-session},$2 $3}" \
     "set-option -pu -t $1 @agent-resurrect-session ; set-option -pu -t $1 @agent-resurrect-cwd ; set-option -pu -t $1 @agent-resurrect-launch"
-  [[ $2 != claude ]] || tmux if-shell -F -t "$1" "#{==:#{@claude_session_id},$3}" \
-    "set-option -pu -t $1 @claude_session_id"
 }
 
 # Usage: quote STRING
@@ -305,8 +273,8 @@ projects_dir() { printf '%s/projects\n' "${1:-${CLAUDE_CONFIG_DIR:-$HOME/.claude
 # Usage: claude_projects_dir JSON
 # Print projects_dir for the Claude session that JSON, a snapshot record or a
 # pane's @agent-resurrect-launch, describes. Its config_dir is the session's
-# CLAUDE_CONFIG_DIR, empty when that was unset. Records saved by earlier
-# versions have none, and the tmux server's CLAUDE_CONFIG_DIR stands in.
+# CLAUDE_CONFIG_DIR, empty when that was unset. A record has none when the
+# session's was relative, and the tmux server's CLAUDE_CONFIG_DIR stands in.
 claude_projects_dir() {
   local config
   if config=$(jq -er '.config_dir | strings' <<<"$1" 2>/dev/null); then
@@ -361,16 +329,6 @@ valid_record() {
       (.agent == "claude" and (.options | type == "array" and
         all(.[]; type == "string" and (test("[\u0000-\u001f\u007f]") | not))))))
   ' >/dev/null 2>&1 <<<"$1"
-}
-
-# Usage: former_record JSON
-# Print JSON, a pane record that the plugin kept under its former name,
-# claude-tmux-resurrect, in the current format: those records are Claude's and
-# do not name an agent. Print nothing unless JSON is exactly one object; the
-# result still needs valid_record.
-former_record() {
-  jq -sc 'if length == 1 and (.[0] | type == "object") then .[0] + {agent: "claude"} else empty end' \
-    <<<"$1" 2>/dev/null || true
 }
 
 # Usage: record_target RECORD

@@ -53,12 +53,6 @@ else
   problem 'tmux-resurrect is not loaded'
 fi
 
-# Setup removes the registrations made under the plugin's former name, so any
-# left mean that version loaded after it or setup has not run since.
-if former_registered; then
-  problem 'the plugin is still registered under its former name, claude-tmux-resurrect; remove anything that loads that version from the tmux configuration, then reload it'
-fi
-
 # A tmux plugin directory that holds the Claude Code hooks, such as a TPM
 # clone, lists itself in CLAUDE_CODE_PLUGIN_DIRS. The Nix tmux package leaves
 # them to a separately installed Claude plugin.
