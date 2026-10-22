@@ -92,15 +92,18 @@ class Integration(unittest.TestCase):
         }
         # The only executables named claude and opencode available before the
         # inherited PATH are these stubs. They log argv/cwd, with the program
-        # for opencode, and hold the pane until teardown.
+        # for opencode and any CLAUDE_CONFIG_DIR, and hold the pane until
+        # teardown.
         for program, extra in [("claude", ""), ("opencode", ", 'program': 'opencode'")]:
             stub = self.stubdir / program
             stub.write_text(
                 f"#!{PYTHON}\n"
                 "import json, os, sys, time\n"
+                f"entry = {{'argv': sys.argv[1:], 'cwd': os.getcwd(){extra}}}\n"
+                "if 'CLAUDE_CONFIG_DIR' in os.environ:\n"
+                "    entry['config'] = os.environ['CLAUDE_CONFIG_DIR']\n"
                 "with open(os.environ['CLAUDE_TEST_LOG'], 'a') as f:\n"
-                "    f.write(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd()"
-                f"{extra}}}) + '\\n')\n"
+                "    f.write(json.dumps(entry) + '\\n')\n"
                 "time.sleep(120)\n"
             )
             stub.chmod(0o755)
@@ -754,11 +757,12 @@ class Integration(unittest.TestCase):
         self.load_plugin()
         self.attach()
         self.assertEqual(self.expect_launches(2)[1]["argv"], ["--resume", ID])
-        # Restoring the same snapshot again queues neither pane.
+        # Restoring the same snapshot again types into neither pane.
         self.execute_resurrect_hook("post-restore-all", self.snapshot)
         for pane in [self.pane, later]:
-            self.assertEqual(self.option("@agent-resurrect-resume-data", pane), "")
+            self.assertEqual(self.option("@agent-resurrect-launched", pane), "1")
             self.assertEqual(self.option("@claude_resume_data", pane), "")
+        time.sleep(0.15)
         self.assertEqual(len(self.launches()), 2)
 
     @unittest.skipUnless(FORMER, "CLAUDE_TMUX_RESURRECT_SOURCE is supplied by Nix")
@@ -1262,10 +1266,13 @@ class Integration(unittest.TestCase):
                 "program": "opencode",
             },
         )
-        # OpenCode reports a reopened session only at its next prompt, so the
-        # dispatcher records it.
-        self.assertEqual(self.option("@agent-resurrect-session"), "opencode ses_1")
-        self.assertEqual(self.option("@agent-resurrect-cwd"), str(directory))
+        # OpenCode reports a reopened session only at its next prompt; until
+        # then, saves keep the record that was dispatched.
+        self.write_snapshot(command="opencode", full="opencode")
+        self.script("tmux-agent-resurrect-save", self.snapshot)
+        self.assertEqual([record["session_id"] for record in self.records()], ["ses_1"])
+        self.record("start", "opencode", "ses_1", directory)
+        self.assertEqual(self.option("@agent-resurrect-resume-data"), "")
 
     def test_recorded_opencode_session_is_saved_only_while_it_runs(self):
         self.record("start", "opencode", "ses_1", self.cwd)
@@ -1333,10 +1340,10 @@ class Integration(unittest.TestCase):
         self.assertEqual(
             launch, {"argv": ["--resume", ID], "cwd": str(self.cwd.resolve())}
         )
-        wait_until(
-            lambda: self.option("@agent-resurrect-resume-cmd") == "",
-            "pending command not cleared",
-        )
+        # The resumed session's hook replaces the dispatched record.
+        self.assertNotEqual(self.option("@agent-resurrect-resume-cmd"), "")
+        self.hook("SessionStart")
+        self.assertEqual(self.option("@agent-resurrect-resume-cmd"), "")
         self.attach()
         self.script("tmux-agent-resurrect-arm", self.session)
         self.script("tmux-agent-resurrect-post-restore", self.snapshot)
@@ -1570,13 +1577,48 @@ class Integration(unittest.TestCase):
         self.script("tmux-agent-resurrect-arm", self.session)
         self.expect_launches(1)
 
-    def test_custom_claude_config_dir(self):
+    def test_each_session_resumes_with_its_claude_config_dir(self):
+        custom = self.home / "custom config"
+        transcript = custom / "projects/-synthetic-project" / f"{ID}.jsonl"
+        transcript.parent.mkdir(parents=True)
+        shutil.move(self.transcript(), transcript)
+        # Only the Claude session runs with this directory, not the tmux server.
+        self.hook("SessionStart", env=dict(self.env, CLAUDE_CONFIG_DIR=str(custom)))
+        self.assertEqual(
+            json.loads(self.option("@agent-resurrect-launch")),
+            {"config_dir": str(custom)},
+        )
+        self.write_snapshot()
+        self.script("tmux-agent-resurrect-save", self.snapshot)
+        [record] = self.records()
+        self.assertEqual(record["config_dir"], str(custom))
+        self.hook("SessionEnd")
+        self.assertEqual(self.option("@agent-resurrect-launch"), "")
+        self.attach()
+        self.script("tmux-agent-resurrect-post-restore", self.snapshot)
+        self.assertEqual(
+            self.expect_launches(1)[0],
+            {
+                "argv": ["--resume", ID],
+                "cwd": str(self.cwd.resolve()),
+                "config": str(custom),
+            },
+        )
+
+    def test_records_without_a_config_dir_use_the_server_one(self):
+        # Records that earlier versions saved do not name a directory.
         self.save()
+        record = self.records()[0]
+        self.assertEqual(record.pop("config_dir"), "")
+        self.snapshot.write_text("agent-resurrect\t" + json.dumps(record) + "\n")
         custom = self.home / "custom config"
         (self.home / ".claude").rename(custom)
         self.env["CLAUDE_CONFIG_DIR"] = str(custom)
         self.script("tmux-agent-resurrect-post-restore", self.snapshot)
         self.assertIn(ID, self.option("@agent-resurrect-resume-cmd"))
+        self.assertNotIn(
+            "CLAUDE_CONFIG_DIR", self.option("@agent-resurrect-resume-cmd")
+        )
 
     def test_explicit_snapshot_path_with_spaces_and_symlink_rejection(self):
         self.transcript()
@@ -1605,10 +1647,12 @@ class Integration(unittest.TestCase):
         )
         self.assertEqual(self.option("@agent-resurrect-resume-cmd"), "")
 
-    def test_missing_claude_leaves_pending_for_retry(self):
+    def test_dispatch_leaves_finding_the_agent_to_the_pane_shell(self):
         self.save()
         self.script("tmux-agent-resurrect-post-restore", self.snapshot)
         self.attach()
+        # The tmux server's PATH lacks Claude, as when tmux starts before the
+        # shell configuration that adds it; the pane's shell finds it.
         sparse = self.base / "without-claude"
         sparse.mkdir()
         for command in ["tmux", "jq"]:
@@ -1620,10 +1664,26 @@ class Integration(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("required command not found on PATH: claude", result.stderr)
-        self.assertNotEqual(self.option("@agent-resurrect-resume-data"), "")
-        self.script("tmux-agent-resurrect-arm", self.session)
         self.expect_launches(1)
+
+    def test_a_failed_dispatch_stays_in_snapshots(self):
+        self.save()
+        expected = self.records()
+        self.script("tmux-agent-resurrect-post-restore", self.snapshot)
+        # The pane's shell does not find Claude.
+        (self.stubdir / "claude").rename(self.stubdir / "claude-unavailable")
+        self.attach()
+        self.script("tmux-agent-resurrect-arm", self.session)
+        self.assertEqual(self.option("@agent-resurrect-launched"), "1")
+        self.write_snapshot(command="bash", full="bash")
+        self.script("tmux-agent-resurrect-save", self.snapshot)
+        self.assertEqual(self.records(), expected)
+        # Restoring again does not type it a second time.
+        (self.stubdir / "claude-unavailable").rename(self.stubdir / "claude")
+        self.script("tmux-agent-resurrect-post-restore", self.snapshot)
+        self.assertNotEqual(self.option("@agent-resurrect-resume-data"), "")
+        time.sleep(0.15)
+        self.assertEqual(self.launches(), [])
 
     def test_missing_jq_reports_dependency(self):
         # Exercise the ordinary source script: Nix wrappers supply jq by design.

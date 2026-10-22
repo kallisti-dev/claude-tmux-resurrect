@@ -15,11 +15,13 @@ tmux set-option -g @agent-resurrect-restoring 1
 trap 'tmux set-option -gu @agent-resurrect-restoring; rm -f -- "$reasons"' EXIT
 snapshot=${1:-$(last_snapshot)}
 # A new restore replaces the pending set, including when choosing an older
-# snapshot that has no mapping for a previously queued pane.
+# snapshot that has no mapping for a previously queued pane. Panes already
+# dispatched keep their record until the agent reports the session.
 while IFS= read -r pane; do
+  [[ -n $pane ]] || continue
   tmux set-option -pu -t "$pane" @agent-resurrect-resume-cmd
   tmux set-option -pu -t "$pane" @agent-resurrect-resume-data
-done < <(tmux list-panes -a -F '#{pane_id}')
+done < <(tmux list-panes -a -F '#{?#{@agent-resurrect-launched},,#{pane_id}}')
 while IFS= read -r session; do
   tmux set-option -u -t "$session" @agent-resurrect-pending
 done < <(tmux list-sessions -F '#{session_id}')

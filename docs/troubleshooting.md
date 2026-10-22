@@ -118,15 +118,22 @@ or run:
 
 ## Dependency not found
 
-Make the named executable available on the tmux server's PATH. Claude must also
-be available on the pane shell's PATH. The Nix package supplies its other
-dependencies itself.
+Make jq and the other named executables available on the tmux server's PATH;
+the Nix packages supply them themselves. The agent itself only needs to be on
+the PATH of the pane's shell, which runs the resume command.
 
 ## A dispatched command failed
 
-Pending commands are cleared after sending, not after Claude confirms success.
-Fix the cause and run the exact resume command manually. To deliberately requeue
-from the snapshot, first clear the dispatched flag on that pane:
+The pane keeps the saved session until the agent reports one, so saves keep
+it, but it is not typed again. Fix the cause, such as an agent the pane's shell
+does not find, and run the resume command, which is kept for inspection:
+
+```sh
+tmux show-options -pqv @agent-resurrect-resume-cmd
+```
+
+To deliberately requeue it from the snapshot instead, first clear the
+dispatched flag on that pane:
 
 ```sh
 tmux set-option -pu @agent-resurrect-launched

@@ -17,7 +17,15 @@ id=$(jq -er '.session_id | select(type == "string")' <<<"$payload") || die 'hook
 valid_id "$id" || die 'invalid hook session_id'
 case "$event" in
   SessionStart)
-    record_session "$TMUX_PANE" claude "$id"
+    # The session's transcript is under its configuration directory, and
+    # resuming it needs the same one. A relative directory was relative to a
+    # directory that is not known here, so leave it out.
+    config=${CLAUDE_CONFIG_DIR:-}
+    launch=''
+    if [[ (-z $config || $config == /*) && $config != *[[:cntrl:]]* ]]; then
+      launch=$(jq -cn --arg config "$config" '{config_dir: $config}')
+    fi
+    record_session "$TMUX_PANE" claude "$id" '' "$launch"
     # Report a Claude plugin whose version differs from the tmux plugin's: one
     # installed separately, as with the Nix packages, or an earlier copy that
     # a pane opened before the plugin moved still lists in its

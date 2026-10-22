@@ -183,18 +183,24 @@ pane_session() {
   printf '%s' "$session"
 }
 
-# Usage: record_session PANE AGENT ID [DIRECTORY]
+# Usage: record_session PANE AGENT ID [DIRECTORY [LAUNCH]]
 # Record that PANE runs AGENT's session ID, in DIRECTORY if given, replacing
-# any pending resume. The directory is set first, so a reader that sees the
-# session also sees its directory. Callbacks registered under the former name
-# read only what that version's hook records, so while they run, a Claude
-# session is also recorded that way; otherwise any session recorded that way
-# is cleared.
+# any pending resume. LAUNCH, if given, is the JSON object that save adds to
+# the session's record, describing how the agent runs. Both are set first, so
+# a reader that sees the session also sees them. Callbacks registered under
+# the former name read only what that version's hook records, so while they
+# run, a Claude session is also recorded that way; otherwise any session
+# recorded that way is cleared.
 record_session() {
   if [[ -n ${4:-} ]]; then
     tmux set-option -p -t "$1" @agent-resurrect-cwd "$4"
   else
     tmux set-option -pu -t "$1" @agent-resurrect-cwd
+  fi
+  if [[ -n ${5:-} ]]; then
+    tmux set-option -p -t "$1" @agent-resurrect-launch "$5"
+  else
+    tmux set-option -pu -t "$1" @agent-resurrect-launch
   fi
   tmux set-option -p -t "$1" @agent-resurrect-session "$2 $3"
   if [[ $2 == claude ]] && former_registered; then
@@ -214,7 +220,7 @@ record_session() {
 # command, so a newer session that has started meanwhile stays.
 end_session() {
   tmux if-shell -F -t "$1" "#{==:#{@agent-resurrect-session},$2 $3}" \
-    "set-option -pu -t $1 @agent-resurrect-session ; set-option -pu -t $1 @agent-resurrect-cwd"
+    "set-option -pu -t $1 @agent-resurrect-session ; set-option -pu -t $1 @agent-resurrect-cwd ; set-option -pu -t $1 @agent-resurrect-launch"
   [[ $2 != claude ]] || tmux if-shell -F -t "$1" "#{==:#{@claude_session_id},$3}" \
     "set-option -pu -t $1 @claude_session_id"
 }
@@ -229,19 +235,35 @@ quote() {
   printf "'%s'" "${1//\'/$q}"
 }
 
-# Print the directory that holds Claude's transcripts, under CLAUDE_CONFIG_DIR
-# or ~/.claude.
-projects_dir() { printf '%s/projects\n' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; }
+# Usage: projects_dir [CONFIG_DIR]
+# Print the directory that holds Claude's transcripts under the Claude
+# configuration directory CONFIG_DIR, by default CLAUDE_CONFIG_DIR or
+# ~/.claude.
+projects_dir() { printf '%s/projects\n' "${1:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"; }
 
-# Usage: find_transcript SESSION_ID
+# Usage: claude_projects_dir JSON
+# Print projects_dir for the Claude session that JSON, a snapshot record or a
+# pane's @agent-resurrect-launch, describes. Its config_dir is the session's
+# CLAUDE_CONFIG_DIR, empty when that was unset. Records saved by earlier
+# versions have none, and the tmux server's CLAUDE_CONFIG_DIR stands in.
+claude_projects_dir() {
+  local config
+  if config=$(jq -er '.config_dir | strings' <<<"$1" 2>/dev/null); then
+    projects_dir "${config:-$HOME/.claude}"
+  else
+    projects_dir
+  fi
+}
+
+# Usage: find_transcript SESSION_ID [PROJECTS_DIR]
 # Print the path of the session's transcript: the only readable
-# SESSION_ID.jsonl in a project directory under projects_dir. Fail silently if
-# SESSION_ID is invalid or has no transcript; warn and fail if several projects
-# have one.
+# SESSION_ID.jsonl in a project directory under PROJECTS_DIR, by default
+# projects_dir. Fail silently if SESSION_ID is invalid or has no transcript;
+# warn and fail if several projects have one.
 find_transcript() {
   local candidate found=''
   valid_id "$1" || return 1
-  for candidate in "$(projects_dir)"/*/"$1".jsonl; do
+  for candidate in "${2:-$(projects_dir)}"/*/"$1".jsonl; do
     [[ -f $candidate && -r $candidate ]] || continue
     if [[ -n $found ]]; then
       warn "ambiguous transcript for session $1; skipping"
@@ -271,7 +293,9 @@ valid_record() {
     (.session_id | type == "string" and test("^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}\\z")) and
     (.cwd | text and startswith("/")) and
     (.worktree | type == "string" and (test("[\u0000-\u001f\u007f/]") | not)) and
-    (.agent == "claude" or .worktree == ""))
+    (.agent == "claude" or .worktree == "") and
+    ((has("config_dir") | not) or
+      (.agent == "claude" and (.config_dir == "" or (.config_dir | text and startswith("/"))))))
   ' >/dev/null 2>&1 <<<"$1"
 }
 
@@ -341,14 +365,17 @@ opencode_resume_command() {
 # Usage: claude_resume_command RECORD
 # For a valid Claude record: cd to the saved directory and run
 # claude --resume SESSION_ID, or, for a named worktree, cd to the main
-# repository and add --worktree NAME. Fail if its transcript is missing,
-# ambiguous, or empty, or a directory no longer exists.
+# repository and add --worktree NAME, with the session's CLAUDE_CONFIG_DIR if
+# it had one. Fail if its transcript is missing, ambiguous, or empty, or a
+# directory no longer exists.
 claude_resume_command() {
-  local record=$1 dir id worktree transcript root
+  local record=$1 dir id worktree transcript root config claude=claude
   dir=$(jq -r '.cwd' <<<"$record")
   id=$(jq -r '.session_id' <<<"$record")
   worktree=$(jq -r '.worktree' <<<"$record")
-  transcript=$(find_transcript "$id") || {
+  config=$(jq -r '.config_dir // ""' <<<"$record")
+  [[ -z $config ]] || claude="CLAUDE_CONFIG_DIR=$(quote "$config") claude"
+  transcript=$(find_transcript "$id" "$(claude_projects_dir "$record")") || {
     warn "missing or ambiguous transcript for $id; skipping"
     return 1
   }
@@ -374,9 +401,9 @@ claude_resume_command() {
       warn "main repository no longer exists: $root"
       return 1
     }
-    printf 'cd -- %s && claude --resume %s --worktree %s' "$(quote "$root")" "$(quote "$id")" "$(quote "$worktree")"
+    printf 'cd -- %s && %s --resume %s --worktree %s' "$(quote "$root")" "$claude" "$(quote "$id")" "$(quote "$worktree")"
   else
-    printf 'cd -- %s && claude --resume %s' "$(quote "$dir")" "$(quote "$id")"
+    printf 'cd -- %s && %s --resume %s' "$(quote "$dir")" "$claude" "$(quote "$id")"
   fi
 }
 

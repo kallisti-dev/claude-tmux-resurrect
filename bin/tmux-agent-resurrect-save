@@ -25,7 +25,8 @@ while IFS=$'\t' read -r command row; do
   [[ -n $pane ]] || continue
   session=$(pane_session "$pane")
   if [[ -z $session ]]; then
-    # Save-before-attach must not discard sessions still waiting to launch.
+    # Keep sessions still waiting to launch, and those dispatched whose agent
+    # has not reported them yet.
     pending=$(pane_option "$pane" @agent-resurrect-resume-data)
     running=$(agent_of_command "$command")
     if [[ -n $pending ]] && valid_record "$pending"; then
@@ -50,8 +51,10 @@ while IFS=$'\t' read -r command row; do
   dir=$(pane_option "$pane" @agent-resurrect-cwd)
   [[ $dir == /* ]] || dir=$(tmux display-message -p -t "$pane" '#{pane_current_path}')
   worktree=''
+  launch=$(pane_option "$pane" @agent-resurrect-launch)
+  jq -e 'type == "object"' >/dev/null 2>&1 <<<"$launch" || launch='{}'
   if [[ $agent == claude ]]; then
-    if transcript=$(find_transcript "$id"); then
+    if transcript=$(find_transcript "$id" "$(claude_projects_dir "$launch")"); then
       # JSON decoding handles spaces, escaping and pretty/partially written lines.
       last_cwd=$(jq -Rn '
         reduce inputs as $line (null;
@@ -67,7 +70,8 @@ while IFS=$'\t' read -r command row; do
     worktree=$(worktree_name "$dir")
   fi
   record=$(jq -c --arg agent "$agent" --arg cwd "$dir" --arg id "$id" --arg worktree "$worktree" \
-    '. + {version: 1, agent: $agent, cwd: $cwd, session_id: $id, worktree: $worktree}' <<<"$row")
+    --argjson launch "$launch" \
+    '$launch + . + {version: 1, agent: $agent, cwd: $cwd, session_id: $id, worktree: $worktree}' <<<"$row")
   if valid_record "$record"; then
     printf '%s\n' "$record" >>"$records"
   else

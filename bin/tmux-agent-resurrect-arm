@@ -24,7 +24,10 @@ remaining=0
 while IFS= read -r pane; do
   record=$(pane_option "$pane" @agent-resurrect-resume-data)
   [[ -n $record ]] || continue
-  if [[ -n $(pane_session "$pane") || -n $(pane_option "$pane" @agent-resurrect-launched) ]]; then
+  # A dispatched record stays until the agent reports its session, so that
+  # saves keep it if the command fails in the pane's shell.
+  [[ -z $(pane_option "$pane" @agent-resurrect-launched) ]] || continue
+  if [[ -n $(pane_session "$pane") ]]; then
     tmux set-option -pu -t "$pane" @agent-resurrect-resume-cmd
     tmux set-option -pu -t "$pane" @agent-resurrect-resume-data
     continue
@@ -52,24 +55,10 @@ while IFS= read -r pane; do
     tmux set-option -pu -t "$pane" @agent-resurrect-resume-data
     continue
   fi
-  # The tmux server's PATH stands in for that of the shell that runs the
-  # command; the session stays pending until it finds the agent.
-  if ! command -v "$agent" >/dev/null 2>&1; then
-    notify "required command not found on PATH: $agent; $label in $where stays pending"
-    remaining=1
-    continue
-  fi
   # Literal mode prevents tmux interpreting command text as key names.
   tmux send-keys -l -t "$pane" "$cmd"
   tmux send-keys -t "$pane" Enter
   tmux set-option -p -t "$pane" @agent-resurrect-launched 1
-  tmux set-option -pu -t "$pane" @agent-resurrect-resume-cmd
-  tmux set-option -pu -t "$pane" @agent-resurrect-resume-data
-  # An agent that reports late would leave the resumed session unrecorded
-  # until its next prompt, so a save in between would lose it.
-  if reports_late "$agent"; then
-    record_session "$pane" "$agent" "$(jq -r '.session_id' <<<"$record")" "$(jq -r '.cwd' <<<"$record")"
-  fi
 done < <(tmux list-panes -s -t "$session" -F '#{pane_id}')
 if [[ $remaining == 0 ]]; then
   tmux set-option -u -t "$session" @agent-resurrect-pending

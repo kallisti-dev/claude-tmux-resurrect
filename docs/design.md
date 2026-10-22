@@ -43,18 +43,20 @@ packages of different versions.
 
 ## Save and restore
 
-Claude's SessionStart hook records the exact session ID on its tmux pane.
-SessionEnd clears that ID only if it still matches, so a delayed event cannot
-clear a newer conversation. Saving adds these mappings to the resurrect snapshot
+Claude's SessionStart hook records the exact session ID on its tmux pane, with
+the `CLAUDE_CONFIG_DIR` that Claude runs with: the session's transcript is in
+that directory, and resuming it needs the same one. SessionEnd clears them
+only if the ID still matches, so a delayed event cannot clear a newer
+conversation. Saving adds these mappings to the resurrect snapshot
 and blanks the generic saved agent commands to prevent a second process restart.
 When resuming, there is no fallback to a session picker: a missing or ambiguous
 transcript is skipped with a diagnostic.
 
 OpenCode reports sessions late: a new session exists only after its first
 prompt, a session reopened with `-s` is reported at its next prompt, and an
-unclean exit reports nothing. For such an agent, the dispatcher records the
-session it resumes as soon as it types the command, and a save keeps a recorded
-session only while the pane's command is still that agent. Panes running it
+unclean exit reports nothing. For such an agent, saves keep a session the
+dispatcher resumed until the agent reports a session, and keep a session the
+agent reported only while the pane's command is still that agent. Panes running it
 without a recorded session are not reported, because before the first prompt
 there is nothing to resume.
 
@@ -66,11 +68,13 @@ attachment or client switch. This avoids launching every saved conversation duri
 a detached restore.
 
 The dispatcher serializes launches within each session and leaves panes pending
-if they are outside a supported shell or in copy mode. After sending a command,
-it marks the pane as dispatched and removes its pending state. That flag lasts
-for the pane's lifetime, preventing later attachments or repeated restore calls
-from launching the conversation again.
-Dispatch records that the command was sent, not that Claude started successfully;
+if they are outside a supported shell or in copy mode. It types the command
+without looking for the agent itself: the pane's shell, whose configuration
+can extend its `PATH`, finds it. After sending a command, it marks the pane as
+dispatched. That flag lasts for the pane's lifetime, preventing later
+attachments or repeated restore calls from launching the conversation again.
+The pane keeps the saved record until the agent reports a session, so saves
+keep a conversation whose command failed in the pane;
 see [troubleshooting](troubleshooting.md) for recovery steps.
 
 ## Notices
@@ -166,8 +170,10 @@ name an agent, as Claude's.
 ## Local data
 
 The only Claude files read are matching
-`$CLAUDE_CONFIG_DIR/projects/*/SESSION_ID.jsonl` transcripts (default configuration
-root: `~/.claude`). Save streams these files to obtain top-level `cwd` values,
+`$CLAUDE_CONFIG_DIR/projects/*/SESSION_ID.jsonl` transcripts, in the configuration
+directory the session ran with (default: `~/.claude`). Records saved by earlier
+versions do not name one, and the tmux server's `CLAUDE_CONFIG_DIR` stands in.
+Save streams these files to obtain top-level `cwd` values,
 using the latest valid absolute path or falling back to the pane's directory.
 Restore checks for a unique, readable, nonempty matching transcript. No transcript,
 worktree, or Claude settings file is modified. Transcript contents are never
@@ -176,7 +182,9 @@ copied into snapshots.
 Each snapshot includes lines beginning `agent-resurrect`, followed by a tab and a JSON
 object containing schema version 1, the agent (`claude`), tmux session name,
 window and pane indexes, the agent's session ID, absolute cwd, and Claude
-worktree name, which is empty for other agents. This local metadata can reveal
+worktree name, which is empty for other agents. Claude records also hold the
+session's `CLAUDE_CONFIG_DIR` as `config_dir`, empty when it was unset. This
+local metadata can reveal
 project names and paths. Snapshot files are replaced with mode 0600; use a private
 snapshot directory as well. Existing resurrect pane titles, commands, or optional
 pane-content captures may contain additional information independently of this
@@ -188,7 +196,8 @@ integration. There is no network service or telemetry in these scripts.
 | --- | --- | --- |
 | `@agent-resurrect-session` | Pane | The agent and session ID running in the pane, such as `claude 1111…`, maintained by the agent's hooks |
 | `@agent-resurrect-cwd` | Pane | The recorded session's directory, from agents whose session files save does not read |
-| `@agent-resurrect-resume-data` | Pane | Snapshot metadata waiting to be dispatched |
+| `@agent-resurrect-launch` | Pane | How the recorded session's agent runs, such as Claude's `config_dir`, for save to add to its record |
+| `@agent-resurrect-resume-data` | Pane | Snapshot metadata waiting to be dispatched, or dispatched and not yet reported by the agent |
 | `@agent-resurrect-resume-cmd` | Pane | Generated resume command, available for inspection |
 | `@agent-resurrect-launched` | Pane | Command already dispatched during this pane's lifetime |
 | `@agent-resurrect-pending` | Session | At least one pane has a pending resume |
@@ -197,8 +206,9 @@ integration. There is no network service or telemetry in these scripts.
 | `@agent-resurrect-unrecorded` | Global session | Claude panes without a session ID at the last save that warned about them |
 | `@agent-resurrect-mismatch` | Global session | Plugin versions in the last mismatch reported at SessionStart |
 
-Pending commands and metadata are removed after dispatch. The saved metadata is
-also retained when saving a conversation that is still waiting for attachment.
+Pending commands and metadata are removed when the agent reports a session in
+the pane. Until then, saving retains the saved metadata, whether the
+conversation is waiting for attachment or was dispatched.
 
 Setup keeps previous and managed hook values, array slots, and expected handler
 text in global `@agent-resurrect-*` options, and the directory it listed in

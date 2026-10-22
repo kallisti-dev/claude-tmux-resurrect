@@ -168,9 +168,11 @@ callback that was set before the plugin loaded, follow the
 
 ### Claude configuration directory
 
-For a custom `CLAUDE_CONFIG_DIR`, set the same absolute path in tmux's global
-environment, where the save and restore callbacks run. Only one Claude
-configuration directory per tmux server is supported.
+Each Claude session resumes with the `CLAUDE_CONFIG_DIR` it ran with, so panes
+can use different configuration directories. Use an absolute path; a session
+with a relative one is restored as one saved by an earlier version of the
+plugin, which uses the `CLAUDE_CONFIG_DIR` in tmux's global environment, where
+the save and restore callbacks run.
 
 ## Nix
 
