@@ -44,8 +44,7 @@ runs TPM itself, so leave out TPM's own lines.
 
 ### Manual installation
 
-Clone the repository outside TPM's plugin directory, where TPM's clean command
-removes plugins that have no `@plugin` line:
+Clone the repository:
 
 ```sh
 git clone https://github.com/kallisti-dev/tmux-agent-resurrect ~/clone/path
