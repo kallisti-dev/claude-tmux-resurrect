@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -1749,6 +1750,7 @@ class Integration(unittest.TestCase):
         # Interrupting Claude ends its session while the pane stays open.
         self.tmux("send-keys", "-t", pane, "C-c")
         wait_until(lambda: not recorded(), "Claude did not clear its session", 30)
+        self.wait_for_exit(pane, "claude")
 
     @unittest.skipUnless(OPENCODE, "OPENCODE_BINARY is supplied by the agents check")
     def test_real_opencode_records_and_clears_its_session(self):
@@ -1821,6 +1823,17 @@ class Integration(unittest.TestCase):
         # Interrupting OpenCode at an empty prompt exits it cleanly.
         self.tmux("send-keys", "-t", pane, "C-c")
         wait_until(lambda: not recorded(), "OpenCode did not clear its session", 30)
+        self.wait_for_exit(pane, "opencode")
+
+    def wait_for_exit(self, pane, agent):
+        # The agent still writes to its configuration directory after its
+        # session ends, and cleanup would race those writes. Nix wrappers run
+        # a binary named .AGENT-wrapped.
+        def running():
+            command = self.tmux("display", "-p", "-t", pane, "#{pane_current_command}")
+            return re.search(rf"(^|/)\.?{agent}($|[-. ])", command.stdout.strip())
+
+        wait_until(lambda: not running(), f"{agent} did not exit", 30)
 
     def install_tpm(self):
         # TPM and resurrect, where the README's configuration loads them.
