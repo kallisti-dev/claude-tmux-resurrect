@@ -304,8 +304,8 @@ the pane last prompted.
 `@resurrect-dir` sets the snapshot directory. The default is `~/.tmux/resurrect`
 if it exists, otherwise `${XDG_DATA_HOME:-$HOME/.local/share}/tmux/resurrect`.
 
-Use absolute paths or a leading `~/` or `$HOME/`; other variables are not expanded.
-Avoid spaces in snapshot directories because tmux-resurrect does not handle them
+As in tmux-resurrect, `~`, `$HOME`, and `$HOSTNAME` are expanded anywhere in the
+path, and no other variables are. Avoid spaces in snapshot directories because tmux-resurrect does not handle them
 reliably. Project directories may contain spaces.
 
 ### Existing resurrect callbacks

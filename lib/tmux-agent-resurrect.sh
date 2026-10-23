@@ -450,10 +450,10 @@ claude_resume_command() {
 
 # Print the path of tmux-resurrect's link to its latest snapshot. The directory
 # follows resurrect's defaults: @resurrect-dir, else ~/.tmux/resurrect if it
-# exists, else the XDG data directory. Unlike resurrect, only a leading ~/ or
-# $HOME/ is expanded; any other relative directory exits through die.
+# exists, else the XDG data directory. As resurrect does, replace every $HOME,
+# then $HOSTNAME, then ~; a directory still relative exits through die.
 last_snapshot() {
-  local dir
+  local dir host=''
   dir=$(tmux show-options -gqv @resurrect-dir)
   if [[ -z $dir ]]; then
     if [[ -d $HOME/.tmux/resurrect ]]; then
@@ -462,10 +462,12 @@ last_snapshot() {
       dir=${XDG_DATA_HOME:-$HOME/.local/share}/tmux/resurrect
     fi
   fi
-  case "$dir" in
-    \~/*) dir=$HOME/${dir#\~/} ;;
-    \$HOME/*) dir=$HOME/${dir#\$HOME/} ;;
-  esac
-  [[ $dir == /* ]] || die "@resurrect-dir must be absolute or start with ~/ or \$HOME/"
+  dir=${dir//\$HOME/"$HOME"}
+  if [[ $dir == *\$HOSTNAME* ]]; then
+    host=$(hostname 2>/dev/null) || host=''
+  fi
+  dir=${dir//\$HOSTNAME/"$host"}
+  dir=${dir//\~/"$HOME"}
+  [[ $dir == /* ]] || die "@resurrect-dir must be an absolute path"
   printf '%s/last\n' "$dir"
 }

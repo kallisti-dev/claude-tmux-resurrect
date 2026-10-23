@@ -1639,6 +1639,19 @@ class Integration(unittest.TestCase):
         self.script("tmux-agent-resurrect-post-restore")
         self.assertIn(ID, self.option("@agent-resurrect-resume-cmd"))
 
+    def test_snapshot_directory_is_expanded_as_resurrect_does(self):
+        hostname = self.stubdir / "hostname"
+        hostname.write_text("#!/bin/sh\necho test-host\n")
+        hostname.chmod(0o755)
+        self.save()
+        saved = self.home / "state/test-host/resurrect"
+        saved.mkdir(parents=True)
+        self.snapshot.rename(saved / self.snapshot.name)
+        (saved / "last").symlink_to(self.snapshot.name)
+        self.tmux("set", "-g", "@resurrect-dir", "~/state/$HOSTNAME/resurrect")
+        self.script("tmux-agent-resurrect-post-restore")
+        self.assertIn(ID, self.option("@agent-resurrect-resume-cmd"))
+
     def test_inconsistent_worktree_metadata_skips(self):
         self.save()
         record = dict(self.records()[0], worktree="not-this-directory")
