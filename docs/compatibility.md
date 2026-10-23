@@ -15,13 +15,15 @@ One foreground agent conversation per pane is supported. Fish, Nushell, native
 Windows, and remote agent processes are unsupported. Linux under WSL2 is
 untested.
 
-OpenCode support covers the 1.x terminal interface; the tests use OpenCode
-1.18 and the plugin was also tried with 1.19. The plugin relies on the
-interface running plugins in a worker thread, which tells it apart from
-`opencode run`. OpenCode 2, which keeps sessions in a shared background
-service, is unsupported. OpenCode reports a session at its first prompt, so a
-session switched to inside OpenCode is saved as the previous one until its next
-prompt.
+OpenCode support covers the terminal interfaces of OpenCode 1 and 2; the tests
+use OpenCode 1.18 and 2.0.32, and the plugin was also tried with 1.19. The
+OpenCode 1 plugin relies on the interface running plugins in a worker thread,
+which tells it apart from `opencode run`. OpenCode 1 reports a session at its
+first prompt, so a session switched to inside OpenCode is saved as the previous
+one until its next prompt. OpenCode 2 loads plugins through a background server
+that every OpenCode shares. The server reads `OPENCODE_CONFIG_CONTENT` only
+when it starts, so it loads the plugin listed there only if it was started in a
+pane opened after the plugin loaded.
 
 Claude Code loads the plugin's hooks through `CLAUDE_CODE_PLUGIN_DIRS`, which
 requires version 2.1.280 or later; earlier versions ignore the variable, so
@@ -41,11 +43,12 @@ lifecycle, and interoperability with upstream resurrect and TPM. They install
 the plugin with TPM from `~/.tmux.conf` and from `~/.config/tmux/tmux.conf`,
 with Oh my tmux!, and as a clone, and load the Nix tmux package with
 `run-shell`, as Home Manager and NixOS do; tpack and nix-darwin are untested.
-Two tests run the Claude Code and OpenCode binaries from the pinned nixpkgs,
-without network access, to check that a session started in a new pane loads
-the plugin and records and clears its session ID, and that OpenCode's
-`/tmux-resurrect-check` shows the check for its session. Claude Code loads it
-through `CLAUDE_CODE_PLUGIN_DIRS` from the source and from the `skills`
+Three tests run the Claude Code, OpenCode 1, and OpenCode 2 binaries from
+pinned nixpkgs revisions, without network access. They check that a session
+started in a new pane loads the plugin and records and clears its session ID,
+that OpenCode's `/tmux-resurrect-check` shows the check for its session, and
+that OpenCode 2 records a session it opens with `-s`. Claude Code loads the
+plugin through `CLAUDE_CODE_PLUGIN_DIRS` from the source and from the `skills`
 directory for the Nix packages; OpenCode through `OPENCODE_CONFIG_CONTENT` and
 its configuration file. The tests do not cover authentication, session file
 compatibility across versions, or an actual conversation resumption.

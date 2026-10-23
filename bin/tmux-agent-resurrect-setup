@@ -12,7 +12,7 @@ bin_dir=$(cd -- "${BASH_SOURCE[0]%/*}" && pwd)
 plugin_dir=${bin_dir%/bin}
 prefix=@agent-resurrect
 variable=CLAUDE_CODE_PLUGIN_DIRS
-opencode_plugin=opencode/tmux-agent-resurrect.js
+opencode_plugin=opencode
 
 # Serialize reloads without clearing or rebuilding another plugin's hook array.
 tmux wait-for -L tmux-agent-resurrect-setup
@@ -50,7 +50,7 @@ update_plugin_dirs() {
 
 # Usage: update_opencode_config REMOVE [ADD]
 # Rewrite the plugin list in tmux's global OPENCODE_CONFIG_CONTENT without the
-# plugin file REMOVE, appending ADD if given, and keep the rest of that
+# plugin directory REMOVE, appending ADD if given, and keep the rest of that
 # configuration. OpenCode loads plugins listed there in addition to those in
 # its configuration files. Leave a value that is not a JSON object with a
 # plugin list alone.
@@ -211,7 +211,7 @@ else
   # Likewise, a directory that holds the OpenCode plugin, such as a TPM clone,
   # lists it for OpenCode; the Nix packages install it separately.
   opencode_listing=''
-  [[ ! -f $plugin_dir/$opencode_plugin ]] || opencode_listing=$plugin_dir/$opencode_plugin
+  [[ ! -d $plugin_dir/$opencode_plugin ]] || opencode_listing=$plugin_dir/$opencode_plugin
   if [[ -n $previous || -n $opencode_listing ]]; then
     update_opencode_config "${previous:+$previous/$opencode_plugin}" "$opencode_listing"
   fi

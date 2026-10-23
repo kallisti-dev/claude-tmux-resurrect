@@ -5,6 +5,7 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import tempfile
 import time
@@ -38,7 +39,8 @@ RESURRECT = os.environ.get("RESURRECT_SOURCE")
 TPM = os.environ.get("TPM_SOURCE")
 OH_MY_TMUX = os.environ.get("OH_MY_TMUX_SOURCE")
 CLAUDE = os.environ.get("CLAUDE_BINARY")
-OPENCODE = os.environ.get("OPENCODE_BINARY")
+OPENCODE_1 = os.environ.get("OPENCODE_1_BINARY")
+OPENCODE_2 = os.environ.get("OPENCODE_2_BINARY")
 VERSION = json.loads((ROOT / ".claude-plugin/plugin.json").read_text())["version"]
 ID = "11111111-2222-3333-4444-555555555555"
 
@@ -691,7 +693,7 @@ class Integration(unittest.TestCase):
             entry = directory / "tmux-agent-resurrect.tmux"
             self.load_plugin(entry)
             self.load_plugin(entry)
-            plugin = str(directory / "opencode/tmux-agent-resurrect.js")
+            plugin = str(directory / "opencode")
             self.assertEqual(
                 self.opencode_config(), dict(user, plugin=[*user["plugin"], plugin])
             )
@@ -708,7 +710,7 @@ class Integration(unittest.TestCase):
         copy = self.base / "plugin copy"
         self.copy_plugin(copy)
         self.load_plugin(copy / "tmux-agent-resurrect.tmux")
-        plugin = str(copy / "opencode/tmux-agent-resurrect.js")
+        plugin = str(copy / "opencode")
         self.assertEqual(self.opencode_config(), {"plugin": [plugin]})
         self.run_command([str(copy / "bin/tmux-agent-resurrect-setup"), "--remove"])
         self.assertIsNone(self.opencode_config())
@@ -1766,13 +1768,13 @@ class Integration(unittest.TestCase):
         wait_until(lambda: not recorded(), "Claude did not clear its session", 30)
         self.wait_for_exit(pane, "claude")
 
-    @unittest.skipUnless(OPENCODE, "OPENCODE_BINARY is supplied by the agents check")
-    def test_real_opencode_records_checks_and_clears_its_session(self):
+    def configure_opencode(self):
+        # OpenCode in new panes uses its own directories and a provider on a
+        # closed local port, so nothing leaves the machine; a session exists
+        # before its first request fails. Return the configuration directory.
         self.load_plugin()
         config = self.home / "opencode config"
         (config / "opencode").mkdir(parents=True)
-        # A provider on a closed local port, so nothing leaves the machine; the
-        # session exists before the first request fails.
         settings = {
             "autoupdate": False,
             "share": "disabled",
@@ -1791,51 +1793,56 @@ class Integration(unittest.TestCase):
         if SEPARATE:
             # Install the OpenCode plugin as Home Manager's
             # programs.opencode.settings.plugin does.
-            plugin = OPENCODE_PLUGIN / "opencode/tmux-agent-resurrect.js"
-            settings["plugin"] = [str(plugin)]
+            settings["plugin"] = [str(OPENCODE_PLUGIN / "opencode")]
         (config / "opencode/opencode.json").write_text(json.dumps(settings))
-        # OpenCode skips installing its plugin package into a configuration
-        # directory it cannot write, which needs the network.
-        (config / "opencode").chmod(0o555)
-        self.addCleanup((config / "opencode").chmod, 0o755)
-        for name, value in {
+        self.opencode_env = {
             "XDG_CONFIG_HOME": str(config),
             "XDG_DATA_HOME": str(self.home / "opencode data"),
             "XDG_CACHE_HOME": str(self.home / "opencode cache"),
             "XDG_STATE_HOME": str(self.home / "opencode state"),
             "OPENCODE_DISABLE_MODELS_FETCH": "1",
             "OPENCODE_DISABLE_AUTOUPDATE": "1",
-        }.items():
+        }
+        for name, value in self.opencode_env.items():
             self.tmux("set-environment", "-g", name, value)
+        return config
+
+    def open_opencode(self, binary, *args, name="opencode"):
         # The check asks Claude for its version and plugins.
         path = shlex.quote(self.fake_claude()["PATH"])
-        command = f"PATH={path} {shlex.quote(OPENCODE)}; sleep 60"
-        self.tmux("new-window", "-d", "-n", "opencode", "-c", str(self.cwd), command)
-        pane = self.tmux("display", "-p", "-t", "work:opencode", "#{pane_id}")
-        pane = pane.stdout.strip()
+        command = f"PATH={path} {shlex.join([binary, *args])}; sleep 60"
+        self.tmux("new-window", "-d", "-n", name, "-c", str(self.cwd), command)
+        pane = self.tmux("display", "-p", "-t", f"work:{name}", "#{pane_id}")
+        return pane.stdout.strip()
 
-        def recorded():
-            result = self.tmux(
-                "show", "-pqv", "-t", pane, "@agent-resurrect-session", check=False
-            )
-            return result.stdout.strip()
+    def recorded(self, pane):
+        result = self.tmux(
+            "show", "-pqv", "-t", pane, "@agent-resurrect-session", check=False
+        )
+        return result.stdout.strip()
 
-        # OpenCode reports a session at its first prompt. Prompt again until it
-        # does, in case the first one comes before the plugin has loaded.
+    def prompt_opencode(self, pane):
+        # OpenCode records a new session at its first prompt. Prompt again until
+        # it does, in case the first one comes before the plugin has loaded.
         for _ in range(6):
             self.tmux("send-keys", "-t", pane, "-l", "hello")
             self.tmux("send-keys", "-t", pane, "Enter")
             try:
-                session = wait_until(recorded, "OpenCode did not record", 10)
+                session = wait_until(
+                    lambda: self.recorded(pane), "OpenCode did not record", 10
+                )
                 break
             except AssertionError:
                 continue
         else:
             self.fail("OpenCode did not record its session")
         self.assertRegex(session, r"^opencode ses_[0-9A-Za-z]+$")
-        cwd = self.tmux("show", "-pqv", "-t", pane, "@agent-resurrect-cwd").stdout
-        self.assertTrue(cwd.strip().startswith("/"), cwd)
-        self.assertEqual(Path(cwd.strip()).resolve(), self.cwd.resolve())
+        cwd = self.option("@agent-resurrect-cwd", pane)
+        self.assertTrue(cwd.startswith("/"), cwd)
+        self.assertEqual(Path(cwd).resolve(), self.cwd.resolve())
+        return session
+
+    def check_in_opencode(self, pane, session):
         # The check command adds the check's output for this session to its
         # prompt, which the TUI shows. Interrupt the failing request first;
         # the first Enter takes the completion.
@@ -1852,10 +1859,67 @@ class Integration(unittest.TestCase):
             "OpenCode did not show the check",
             30,
         )
-        # Interrupting OpenCode at an empty prompt exits it cleanly.
-        self.tmux("send-keys", "-t", pane, "C-c")
-        wait_until(lambda: not recorded(), "OpenCode did not clear its session", 30)
+
+    def quit_opencode(self, pane):
+        # Interrupting OpenCode at an empty prompt, after interrupting its
+        # request, exits it cleanly.
+        for key in ["Escape", "Escape", "C-c"]:
+            self.tmux("send-keys", "-t", pane, key)
+            time.sleep(0.5)
+        wait_until(
+            lambda: not self.recorded(pane), "OpenCode did not clear its session", 30
+        )
         self.wait_for_exit(pane, "opencode")
+
+    @unittest.skipUnless(
+        OPENCODE_1, "OPENCODE_1_BINARY is supplied by the agents check"
+    )
+    def test_real_opencode_1_records_checks_and_clears_its_session(self):
+        config = self.configure_opencode()
+        # OpenCode skips installing its plugin package into a configuration
+        # directory it cannot write, which needs the network.
+        (config / "opencode").chmod(0o555)
+        self.addCleanup((config / "opencode").chmod, 0o755)
+        pane = self.open_opencode(OPENCODE_1)
+        session = self.prompt_opencode(pane)
+        self.check_in_opencode(pane, session)
+        self.quit_opencode(pane)
+
+    @unittest.skipUnless(
+        OPENCODE_2, "OPENCODE_2_BINARY is supplied by the agents check"
+    )
+    def test_real_opencode_2_records_checks_and_clears_the_session_it_shows(self):
+        config = self.configure_opencode()
+        # OpenCode starts a background server, which later OpenCode processes
+        # share and which outlives them. Give it a port of its own rather than
+        # the fixed default, and stop it before cleanup removes its directories.
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        (config / "opencode/service.json").write_text(json.dumps({"port": port}))
+        self.addCleanup(self.stop_opencode_server)
+        pane = self.open_opencode(OPENCODE_2)
+        session = self.prompt_opencode(pane)
+        self.check_in_opencode(pane, session)
+        self.quit_opencode(pane)
+        # OpenCode records a session it opens, without a prompt.
+        pane = self.open_opencode(OPENCODE_2, "-s", session.split()[1], name="resumed")
+        wait_until(
+            lambda: self.recorded(pane) == session,
+            "OpenCode did not record the session it opened",
+            30,
+        )
+        self.quit_opencode(pane)
+
+    def stop_opencode_server(self):
+        # Close the panes first, so that no OpenCode starts the server again.
+        self.tmux("kill-server", check=False)
+        self.run_command(
+            [OPENCODE_2, "service", "stop"],
+            env=dict(self.env, **self.opencode_env),
+            check=False,
+            timeout=30,
+        )
 
     def wait_for_exit(self, pane, agent):
         # The agent still writes to its configuration directory after its

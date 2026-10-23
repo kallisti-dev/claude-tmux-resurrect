@@ -8,11 +8,11 @@ harnesses:
 python3 -m unittest discover -s tests
 ```
 
-Set `CLAUDE_BINARY` and `OPENCODE_BINARY` to also run the `test_real_` tests,
-which start the real harnesses without network access. `nix flake check` runs
-all of the tests against the source and the Nix packages, plus linting and
-formatting; on macOS it needs the Nix sandbox off or relaxed, as building
-claude-code does. CI runs it on each platform.
+Set `CLAUDE_BINARY`, `OPENCODE_1_BINARY`, and `OPENCODE_2_BINARY` to also run
+the `test_real_` tests, which start the real harnesses without network access.
+`nix flake check` runs all of the tests against the source and the Nix
+packages, plus linting and formatting; on macOS it needs the Nix sandbox off or
+relaxed, as building claude-code does. CI runs it on each platform.
 
 [docs/design.md](docs/design.md) explains how the pieces fit together.
 

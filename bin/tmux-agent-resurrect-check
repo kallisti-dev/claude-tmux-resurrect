@@ -109,11 +109,11 @@ else
     fi
   fi
   # Likewise for the OpenCode plugin, listed in OPENCODE_CONFIG_CONTENT.
-  if [[ -f $dir/opencode/tmux-agent-resurrect.js ]]; then
+  if [[ -d $dir/opencode ]]; then
     content=$(tmux show-environment -g OPENCODE_CONFIG_CONTENT 2>/dev/null || true)
-    if jq -e --arg plugin "$dir/opencode/tmux-agent-resurrect.js" 'any(.plugin[]?; . == $plugin)' \
+    if jq -e --arg plugin "$dir/opencode" 'any(.plugin[]?; . == $plugin)' \
       >/dev/null 2>&1 <<<"${content#OPENCODE_CONFIG_CONTENT=}"; then
-      ok 'new panes load the OpenCode plugin through OPENCODE_CONFIG_CONTENT'
+      ok 'new panes list the OpenCode plugin in OPENCODE_CONFIG_CONTENT'
     else
       problem "tmux's global OPENCODE_CONFIG_CONTENT doesn't list the OpenCode plugin; reload the tmux configuration"
     fi

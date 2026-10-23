@@ -141,7 +141,8 @@
                 claude plugin validate --strict ${packages.claude-plugin}
                 patchShebangs --build tmux-agent-resurrect.tmux bin
                 export CLAUDE_BINARY=${pkgs.lib.getExe claude-code}
-                export OPENCODE_BINARY=${pkgs.lib.getExe nixpkgs-opencode-1.legacyPackages.${system}.opencode}
+                export OPENCODE_1_BINARY=${pkgs.lib.getExe nixpkgs-opencode-1.legacyPackages.${system}.opencode}
+                export OPENCODE_2_BINARY=${pkgs.lib.getExe pkgs.opencode}
                 python3 -m unittest discover -s tests -v -f -k test_real_
                 ${testPlugins}
                 python3 -m unittest discover -s tests -v -f -k test_real_

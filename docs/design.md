@@ -5,7 +5,7 @@ restarts each agent pane's conversation exactly. It has two halves:
 
 - A plugin for each harness reports the session its pane runs. The Claude Code
   plugin does this with session hooks; the OpenCode plugin with OpenCode's
-  plugin events.
+  plugin API.
 - The tmux plugin registers callbacks with tmux-resurrect and tmux. Saving
   adds the reported sessions to the resurrect snapshot, restoring prepares a
   resume command for each pane, and attaching a client types those commands
@@ -26,10 +26,10 @@ the plugin's directory and version in `@agent-resurrect-dir` and
 The repository is also a Claude Code plugin and holds the OpenCode plugin.
 When the plugin directory has `hooks/hooks.json`, setup adds the directory to
 `CLAUDE_CODE_PLUGIN_DIRS` in tmux's global environment, and Claude Code loads
-it in place as the session-only plugin `tmux-resurrect@inline`. When it has
-`opencode/tmux-agent-resurrect.js`, setup adds that file to the `plugin` list
-in the global `OPENCODE_CONFIG_CONTENT`, keeping the rest of that JSON, and
-OpenCode loads it beside the plugins in its configuration files. The harness
+it in place as the session-only plugin `tmux-resurrect@inline`. When it has an
+`opencode` directory, setup adds that directory to the `plugin` list in the
+global `OPENCODE_CONFIG_CONTENT`, keeping the rest of that JSON, and OpenCode
+loads it beside the plugins in its configuration files. The harness
 plugins then run from the same files as the tmux callbacks. When the plugin
 moves, setup replaces the entry it added and keeps entries that something else
 added.
@@ -41,12 +41,14 @@ directory, or OpenCode's configuration file.
 
 A process keeps the environment it started with. Harnesses started in panes
 opened before the plugin first loaded don't load it, so setup reports that
-when it first loads into a server that already has panes. A pane opened before
-the plugin moved, such as to a new Nix store path, starts Claude with the
-earlier copy. At SessionStart, the Claude hook compares its own manifest
-version with `@agent-resurrect-version` when it runs from another directory,
-and reports a difference once per pair of versions; this also covers
-separately installed packages of different versions.
+when it first loads into a server that already has panes. OpenCode 2 reads
+`OPENCODE_CONFIG_CONTENT` in a background server that every OpenCode shares,
+so it loads the plugin only if the OpenCode that started the server had it
+listed there. A pane opened before the plugin moved, such as to a new Nix store
+path, starts Claude with the earlier copy. At SessionStart, the Claude hook
+compares its own manifest version with `@agent-resurrect-version` when it runs
+from another directory, and reports a difference once per pair of versions;
+this also covers separately installed packages of different versions.
 
 ## Recording sessions
 
@@ -80,22 +82,33 @@ the command line of `CLAUDE_PID`, the Claude process:
   spaces, so a path is rejoined only where the joined words name an existing
   path, and text such as a system prompt ends the options.
 
-OpenCode tells plugins which session its TUI shows only when that session is
-created or gets a prompt. The OpenCode plugin then runs
-`tmux-agent-resurrect-record start opencode ID DIRECTORY` for the root session,
-ignoring subagent sessions, and `tmux-agent-resurrect-record end opencode ID`
-when OpenCode shuts down cleanly. So a new session is reported at its first
-prompt, a session reopened with `-s` or switched to at its next prompt, and an
-unclean exit not at all. The TUI runs plugins in a worker thread with the
-pane's environment; `opencode run`, `serve`, and `web` run them on the main
-thread, where the plugin does nothing.
+The OpenCode plugin runs `tmux-agent-resurrect-record start opencode ID
+DIRECTORY` for the root session its TUI is in, ignoring subagent sessions, and
+`tmux-agent-resurrect-record end opencode ID` when OpenCode shuts down cleanly.
+The `opencode` directory holds a plugin for each version of OpenCode, which
+share `shared.js`:
+
+- OpenCode 1 loads `tmux-agent-resurrect.js`, the main file in the
+  directory's `package.json`. OpenCode tells it which session the TUI shows
+  only when that session is created or gets a prompt, so a new session is
+  reported at its first prompt, a session reopened with `-s` or switched to at
+  its next prompt, and an unclean exit not at all. The TUI runs plugins in a
+  worker thread with the pane's environment; `opencode run`, `serve`, and
+  `web` run them on the main thread, where the plugin does nothing.
+- OpenCode 2 loads `server.js` in its background server, which the TUIs in
+  every pane share, and `tui.js` in each TUI, with that TUI's environment. The
+  TUI part follows the TUI's route, so it reports a session as soon as the TUI
+  shows it. The server part does nothing, but without it OpenCode doesn't load
+  the TUI part.
 
 The OpenCode plugin also adds the command `/tmux-resurrect-check`. When it
-runs, the plugin first records the session, since the command may be its first
-prompt, then runs `tmux-agent-resurrect-check --session ID` and appends the
-output to the command's prompt for OpenCode to explain. The check gives up on
-`claude` after 10 seconds for each command, and the plugin gives up on the
-check after 30, so the command always reaches OpenCode.
+runs, the plugin first records the session, since in OpenCode 1 the command
+may be its first prompt, then runs `tmux-agent-resurrect-check --session ID`
+and has OpenCode explain the output: OpenCode 1 appends it to the command's
+prompt, and OpenCode 2 sends it to the session as a prompt. Before OpenCode 2
+shows a session, the command shows the check's output in a dialog instead. The
+check gives up on `claude` after 10 seconds for each command, and the plugin
+gives up on the check after 30, so the command always reaches OpenCode.
 
 ## Saving
 
@@ -292,7 +305,9 @@ does not clear a value setup captured; see
 | `bin/tmux-agent-resurrect-setup [--remove]` | Register or remove the callbacks and the harness plugin entries |
 | `.claude-plugin/plugin.json`, `hooks/hooks.json` | Claude Code plugin manifest and session hooks |
 | `bin/tmux-agent-resurrect-claude-hook` | Claude's session hook: record the session and its launch details, or clear it |
-| `opencode/tmux-agent-resurrect.js` | OpenCode plugin: report the TUI's root session, and add `/tmux-resurrect-check`, which adds the check's result to its prompt |
+| `opencode/tmux-agent-resurrect.js`, `opencode/package.json` | OpenCode 1 plugin: report the TUI's root session, and add `/tmux-resurrect-check`, which adds the check's result to its prompt |
+| `opencode/tui.js`, `opencode/server.js` | OpenCode 2 plugin: report the root session the TUI shows, and add `/tmux-resurrect-check`, which sends the check's result to the session |
+| `opencode/shared.js` | What the OpenCode plugins share: recording sessions and running the check |
 | `bin/tmux-agent-resurrect-record start\|end AGENT ID [DIR]` | Record or clear a session on the calling pane, for the OpenCode plugin |
 | `bin/tmux-agent-resurrect-save SNAPSHOT` | Add session records to a snapshot and stop resurrect restarting agent panes |
 | `bin/tmux-agent-resurrect-pre-restore` | Stop dispatch while resurrect restores the layout |
