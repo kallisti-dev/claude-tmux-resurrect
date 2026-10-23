@@ -3,6 +3,9 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    # nixpkgs has OpenCode 2, so the tests take OpenCode 1 from an earlier
+    # revision.
+    nixpkgs-opencode-1.url = "github:NixOS/nixpkgs/ca1659429c950a11a565b5764e37a1b704e17ec8";
     resurrect = {
       url = "github:tmux-plugins/tmux-resurrect";
       flake = false;
@@ -20,6 +23,7 @@
   outputs =
     {
       nixpkgs,
+      nixpkgs-opencode-1,
       resurrect,
       tpm,
       oh-my-tmux,
@@ -137,7 +141,7 @@
                 claude plugin validate --strict ${packages.claude-plugin}
                 patchShebangs --build tmux-agent-resurrect.tmux bin
                 export CLAUDE_BINARY=${pkgs.lib.getExe claude-code}
-                export OPENCODE_BINARY=${pkgs.lib.getExe pkgs.opencode}
+                export OPENCODE_BINARY=${pkgs.lib.getExe nixpkgs-opencode-1.legacyPackages.${system}.opencode}
                 python3 -m unittest discover -s tests -v -f -k test_real_
                 ${testPlugins}
                 python3 -m unittest discover -s tests -v -f -k test_real_
