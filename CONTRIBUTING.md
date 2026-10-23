@@ -1,7 +1,8 @@
 # Contributing
 
 `nix develop`, or direnv with the included `.envrc`, provides the tools. The
-tests drive real tmux, tmux-resurrect, and TPM, with stubs for the harnesses:
+tests drive real tmux, tmux-resurrect, TPM, and Oh my tmux!, with stubs for the
+harnesses:
 
 ```sh
 python3 -m unittest discover -s tests

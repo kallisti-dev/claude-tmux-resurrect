@@ -102,7 +102,7 @@ in
     buildInputs = [ bash ];
     postInstall = wrapScripts ''"$out"/share/tmux-plugins/tmux-agent-resurrect/{tmux-agent-resurrect.tmux,bin/*}'';
     meta = meta // {
-      description = "tmux plugin that restores Claude Code conversations with tmux-resurrect";
+      description = "tmux plugin that restores agent conversations with tmux-resurrect";
     };
   };
 
@@ -113,7 +113,7 @@ in
       ./hooks
       ./skills
     ];
-    description = "Claude Code plugin with the session hooks for the tmux-agent-resurrect tmux plugin";
+    description = "Claude Code plugin with the session hooks and /tmux-resurrect:check for the tmux-agent-resurrect tmux plugin";
   };
 
   opencode-plugin = agentPlugin {
@@ -122,6 +122,6 @@ in
       ./bin/tmux-agent-resurrect-record
       ./opencode
     ];
-    description = "OpenCode plugin that records sessions for the tmux-agent-resurrect tmux plugin";
+    description = "OpenCode plugin that records sessions and adds /tmux-resurrect-check for the tmux-agent-resurrect tmux plugin";
   };
 }

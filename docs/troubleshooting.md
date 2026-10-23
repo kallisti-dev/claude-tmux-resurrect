@@ -24,10 +24,10 @@ line. Inspect the current pane:
 tmux show-options -pqv @agent-resurrect-session
 ```
 
-An empty value means Claude's session hook has not run in that pane. Claude
-loads the hook only when the pane's environment lists the plugin directory,
-which is true of panes opened after the plugin loaded. Check in the pane's
-shell:
+An empty value means Claude's session hook has not run in that pane. Without
+the Nix packages, Claude loads the hook only when the pane's environment lists
+the plugin directory, which is true of panes opened after the plugin loaded.
+Check in the pane's shell:
 
 ```sh
 printenv CLAUDE_CODE_PLUGIN_DIRS

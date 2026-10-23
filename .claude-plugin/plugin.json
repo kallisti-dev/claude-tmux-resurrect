@@ -1,7 +1,7 @@
 {
   "name": "tmux-resurrect",
   "version": "0.1.0",
-  "description": "Session hooks for tmux-agent-resurrect, a tmux plugin that restores Claude Code conversations with tmux-resurrect",
+  "description": "Session hooks and a setup check for tmux-agent-resurrect, a tmux plugin that restores agent conversations with tmux-resurrect",
   "author": { "name": "Adam Curtis" },
   "homepage": "https://github.com/kallisti-dev/tmux-agent-resurrect",
   "repository": "https://github.com/kallisti-dev/tmux-agent-resurrect",

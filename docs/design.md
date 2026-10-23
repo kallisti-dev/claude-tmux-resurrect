@@ -43,16 +43,17 @@ A process keeps the environment it started with. Harnesses started in panes
 opened before the plugin first loaded don't load it, so setup reports that
 when it first loads into a server that already has panes. A pane opened before
 the plugin moved, such as to a new Nix store path, starts Claude with the
-earlier copy. The Claude hook compares its own manifest version with
-`@agent-resurrect-version` whenever it runs from another directory, and
-reports a difference once per pair of versions; this also covers separately
-installed packages of different versions.
+earlier copy. At SessionStart, the Claude hook compares its own manifest
+version with `@agent-resurrect-version` when it runs from another directory,
+and reports a difference once per pair of versions; this also covers
+separately installed packages of different versions.
 
 ## Recording sessions
 
 `record_session` in `lib/tmux-agent-resurrect.sh` sets the session's pane
-options, setting `@agent-resurrect-session` last so that a reader that sees the
-session also sees the rest, and clears any pending resume for the pane.
+options, setting `@agent-resurrect-session` after its directory and launch
+details so that a reader that sees the session also sees them, then clears any
+pending resume for the pane.
 `end_session` clears them only while the pane still records the ending session,
 comparing and clearing in a single tmux command, so a late end cannot clear a
 newer session.

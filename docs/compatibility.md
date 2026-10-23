@@ -26,9 +26,11 @@ prompt.
 Claude Code loads the plugin's hooks through `CLAUDE_CODE_PLUGIN_DIRS`, which
 requires version 2.1.280 or later; earlier versions ignore the variable, so
 their sessions are not tracked. Home Manager installs the Nix Claude plugin as
-a personal plugin, which requires 2.1.157 or later. Organization policies that stop these hooks are unsupported: [managed settings](https://code.claude.com/docs/en/managed-settings)
-can turn off plugins loaded from `CLAUDE_CODE_PLUGIN_DIRS`, `allowManagedHooksOnly`
-runs only hooks from managed settings and the plugins they force-enable, and
+a personal plugin, which requires 2.1.157 or later. Organization policies that
+stop these hooks are unsupported:
+[managed settings](https://code.claude.com/docs/en/managed-settings) can turn
+off plugins loaded from `CLAUDE_CODE_PLUGIN_DIRS`, `allowManagedHooksOnly` runs
+only hooks from managed settings and the plugins they force-enable, and
 `disableAllHooks` stops all hooks. `/status` shows which managed settings Claude
 Code uses.
 
@@ -51,9 +53,10 @@ compatibility across versions, or an actual conversation resumption.
 The transcript directory layout and top-level `cwd` and `permissionMode` fields
 are an integration assumption and can change with Claude versions, as can the
 command-line options that the resume command repeats, which are Claude Code
-2.1.300's. An option a later version adds ends the options that are repeated. Worktree inference covers the
-standard `.claude/worktrees/<name>` layout; it does not recreate deleted trees
-or preserve a subdirectory within a named worktree at launch.
+2.1.300's. An option a later version adds ends the options that are repeated.
+Worktree inference covers the standard `.claude/worktrees/<name>` layout; it
+does not recreate deleted trees or preserve a subdirectory within a named
+worktree at launch.
 
 ## Integration limits
 
@@ -62,13 +65,15 @@ prompt is empty or that shell startup has finished. Avoid typing into pending
 panes while they launch.
 
 Hooks cannot guarantee exactly-once execution across a process crash between
-sending Enter and clearing state. A killed dispatcher can also leave its tmux
-lock held; restart the disposable session or, after confirming no dispatcher is
-running, release `tmux-agent-resurrect-arm-N` with `tmux wait-for -U`.
+sending Enter and marking the pane as dispatched. A killed dispatcher can also
+leave its tmux lock held; restart the disposable session or, after confirming
+no dispatcher is running, release `tmux-agent-resurrect-arm-N` with
+`tmux wait-for -U`.
 
-Abnormally terminated Claude processes may leave their pane ID option behind.
-Clean SessionEnd events clear it. Old snapshots remain local executable-session
-configuration and should only be restored from trusted sources.
+A Claude process that ends without running its SessionEnd hook leaves its
+session recorded on the pane, so later saves keep that session until another
+one starts there. Old snapshots remain local executable-session configuration
+and should only be restored from trusted sources.
 
 The integration does not change resurrect's own layout limitations, grouped
 windows, snapshot pruning, or simultaneous save/restore behavior. Serialize save

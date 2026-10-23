@@ -229,9 +229,10 @@ installation, so there is nothing to update separately.
 ### Uninstalling
 
 The callbacks the plugin registered stay in the running tmux server and do
-nothing once its files are deleted; they and its `CLAUDE_CODE_PLUGIN_DIRS`
-entry disappear when the server exits. To clear them from a running server
-instead, run this inside it before removing the plugin:
+nothing once its files are deleted; they and its entries in
+`CLAUDE_CODE_PLUGIN_DIRS` and `OPENCODE_CONFIG_CONTENT` disappear when the
+server exits. To clear them from a running server instead, run this inside it
+before removing the plugin:
 
 ```sh
 "$(tmux show-options -gqv @agent-resurrect-dir)"/bin/tmux-agent-resurrect-setup --remove
@@ -287,7 +288,8 @@ restore, such as `--model`, `--effort`, `--add-dir`, `--mcp-config` and
 permission mode itself, except bypassing permissions, so the command adds
 `--dangerously-skip-permissions` if the session last bypassed them. On macOS,
 the options are read from `ps`, which joins arguments with spaces, so options
-after a system prompt or another value with spaces are not repeated.
+after a system prompt, or after another value with spaces that isn't an
+existing path, are not repeated.
 
 ### OpenCode
 
@@ -305,8 +307,9 @@ the pane last prompted.
 if it exists, otherwise `${XDG_DATA_HOME:-$HOME/.local/share}/tmux/resurrect`.
 
 As in tmux-resurrect, `~`, `$HOME`, and `$HOSTNAME` are expanded anywhere in the
-path, and no other variables are. Avoid spaces in snapshot directories because tmux-resurrect does not handle them
-reliably. Project directories may contain spaces.
+path, and no other variables are. Avoid spaces in snapshot directories because
+tmux-resurrect does not handle them reliably. Project directories may contain
+spaces.
 
 ### Existing resurrect callbacks
 

@@ -1,5 +1,5 @@
 {
-  description = "tmux plugin that restores Claude Code conversations with tmux-resurrect";
+  description = "tmux plugin that restores agent conversations with tmux-resurrect";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
